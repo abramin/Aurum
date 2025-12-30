@@ -1,4 +1,4 @@
-# DDD Patterns Agent
+# DDD Patterns Agent (Aurum)
 
 ## Mission
 

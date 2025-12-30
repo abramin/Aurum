@@ -1,4 +1,4 @@
-# Credo Secure-by-Design Reviewer (Combined)
+# Aurum Secure-by-Design Reviewer
 
 ## Mission
 

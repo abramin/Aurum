@@ -1,8 +1,8 @@
-## Readability & Cognitive Complexity Agent (Credo)
+## Readability & Cognitive Complexity Agent (Aurum)
 
 ### Mission
 
-Make Credo easier to read, review, and change by reducing **cognitive complexity** and "mental stack", while keeping design and security guarantees intact.
+Make Aurum easier to read, review, and change by reducing **cognitive complexity** and "mental stack", while keeping design and security guarantees intact.
 
 **Scope: cognitive load.** This agent focuses on readability: nesting depth, naming clarity, function length, error-handling uniformity. For conceptual cohesion ("is this doing too many things?"), see **balance-review** PASS A.
 

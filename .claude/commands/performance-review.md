@@ -1,4 +1,4 @@
-# Performance & Scalability Agent (Credo)
+# Performance & Scalability Agent (Aurum)
 
 ## Mission
 

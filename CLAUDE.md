@@ -2,22 +2,22 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
+## Project Goals
 
-Aurum is a finance workspace backend in Go demonstrating DDD, event-driven architecture, and systems design fundamentals. It combines spend management, payables/invoicing, payments orchestration, bank-feed reconciliation, and a double-entry ledger.
+Aurum is a learning project to practice **Staff-level engineering thinking**:
+- **DDD modeling**: Bounded contexts, aggregates, invariants, anti-corruption layers
+- **Systems design**: Consistency, idempotency, failure modes, eventual consistency
+- **Finance domain**: Spend management, payables, payments, ledgers, reconciliation
+
+The goal is depth over breadth—strong design narratives, not feature completeness.
 
 ## Development Commands
 
-Expected Makefile targets (see `prd.md` section 15):
 ```bash
-make up              # Start Docker Compose (Postgres, Kafka/Redpanda)
-make down            # Stop Docker Compose
-make migrate         # Run database migrations
-make test            # Run all tests
-make run-spending    # Run spending API service
-make run-payables    # Run payables API service
-make run-ledger      # Run ledger service
-make run-workers     # Run worker processes
+docker compose up -d     # Start Postgres + Kafka (KRaft mode)
+docker compose down      # Stop infrastructure
+go run ./cmd/aurum       # Run the service entrypoint
+go test ./...            # Run all tests
 ```
 
 ## Architecture

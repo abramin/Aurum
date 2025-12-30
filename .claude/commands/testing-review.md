@@ -1,8 +1,8 @@
-# Testing Agent (Credo)
+# Testing Agent (Aurum)
 
 ## Mission
 
-Keep Credo correct via **contract-first, behavior-driven tests**. Feature files define correctness.
+Keep Aurum correct via **contract-first, behavior-driven tests**. Feature files define correctness.
 
 ## Non-negotiables
 
