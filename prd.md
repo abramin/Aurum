@@ -2,7 +2,7 @@
 
 ## 1. Summary
 
-Build a small but realistic “mini Qonto” backend that combines:
+Build a small but realistic finance app backend that combines:
 - Spend management (authorization, capture, limits)
 - Payables (invoices, approvals)
 - Payments orchestration (provider adapter, async settlement)
@@ -606,7 +606,7 @@ Day 5
 
 * Should PaymentIntent live in Payables or Payments context (ownership)? Recommended: Payables owns intent, Payments owns execution state.
 * One Postgres with schemas vs separate DBs? Separate is more “real”, schemas are faster to build.
-* Kafka vs NATS for local dev? Kafka matches Qonto, NATS is faster to run.
+* Kafka vs NATS for local dev? 
 * Ledger accounts naming: keep it simple (Cash, Expenses, AccountsPayable).
 
 ## 20. Documentation to include in repo
