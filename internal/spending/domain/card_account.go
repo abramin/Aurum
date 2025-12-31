@@ -139,3 +139,20 @@ func (c *CardAccount) RecordReversal(amount vo.Money) error {
 	c.rollingSpend = newSpend
 	return nil
 }
+
+// ReconstructCardAccount reconstructs a CardAccount from persisted state.
+// This is used by repository implementations to rehydrate entities from storage.
+// It bypasses business validation since the data is assumed valid from the database.
+func ReconstructCardAccount(
+	id CardAccountID,
+	tenantID vo.TenantID,
+	spendingLimit vo.Money,
+	rollingSpend vo.Money,
+) *CardAccount {
+	return &CardAccount{
+		id:            id,
+		tenantID:      tenantID,
+		spendingLimit: spendingLimit,
+		rollingSpend:  rollingSpend,
+	}
+}

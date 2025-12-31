@@ -103,3 +103,24 @@ func (a *Authorization) Expire() error {
 func (a *Authorization) CapturedAmount() vo.Money {
 	return a.capturedAmount
 }
+
+// ReconstructAuthorization reconstructs an Authorization from persisted state.
+// This is used by repository implementations to rehydrate entities from storage.
+// It bypasses business validation since the data is assumed valid from the database.
+func ReconstructAuthorization(
+	id AuthorizationID,
+	tenantID vo.TenantID,
+	cardAccountID CardAccountID,
+	authorizedAmount vo.Money,
+	capturedAmount vo.Money,
+	state AuthorizationState,
+) *Authorization {
+	return &Authorization{
+		id:               id,
+		tenantID:         tenantID,
+		cardAccountID:    cardAccountID,
+		authorizedAmount: authorizedAmount,
+		capturedAmount:   capturedAmount,
+		state:            state,
+	}
+}
