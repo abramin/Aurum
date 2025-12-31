@@ -12,7 +12,10 @@ import (
 
 	"aurum/internal/common/config"
 	"aurum/internal/common/logging"
-	"aurum/internal/common/types"
+	vo "aurum/internal/common/value_objects"
+	"aurum/internal/spending/api"
+	"aurum/internal/spending/application"
+	"aurum/internal/spending/infrastructure"
 )
 
 func main() {
@@ -30,7 +33,7 @@ func main() {
 	})
 
 	// Generate correlation ID for startup
-	startupCtx := logging.WithCorrelationID(context.Background(), types.NewCorrelationID())
+	startupCtx := logging.WithCorrelationID(context.Background(), vo.NewCorrelationID())
 
 	logging.InfoContext(startupCtx, "Starting Aurum finance workspace",
 		"port", cfg.Port,
@@ -46,6 +49,14 @@ func main() {
 
 	// Ready check endpoint (checks dependencies)
 	mux.HandleFunc("GET /ready", readyHandler(cfg))
+
+	// Setup spending context
+	authRepo := infrastructure.NewMemoryAuthorizationRepository()
+	cardAccountRepo := infrastructure.NewMemoryCardAccountRepository()
+	idempotencyStore := infrastructure.NewMemoryIdempotencyStore()
+	spendingService := application.NewSpendingService(authRepo, cardAccountRepo, idempotencyStore)
+	spendingHandler := api.NewHandler(spendingService)
+	spendingHandler.RegisterRoutes(mux)
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -85,18 +96,28 @@ func main() {
 // correlationMiddleware adds correlation ID to each request.
 func correlationMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check for existing correlation ID in header
-		corrID := types.CorrelationID(r.Header.Get("X-Correlation-ID"))
-		if corrID.IsEmpty() {
-			corrID = types.NewCorrelationID()
+		// Check for existing correlation ID in header, or generate a new one
+		var corrID vo.CorrelationID
+		if headerCorrID := r.Header.Get("X-Correlation-ID"); headerCorrID != "" {
+			// Try to parse the correlation ID from header
+			var err error
+			corrID, err = vo.ParseCorrelationID(headerCorrID)
+			if err != nil {
+				// If parsing fails, generate a new one
+				corrID = vo.NewCorrelationID()
+			}
+		} else {
+			corrID = vo.NewCorrelationID()
 		}
 
 		// Add to context
 		ctx := logging.WithCorrelationID(r.Context(), corrID)
 
-		// Add tenant ID if present
-		if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" {
-			ctx = logging.WithTenantID(ctx, types.TenantID(tenantID))
+		// Add tenant ID if present and valid
+		if tenantIDStr := r.Header.Get("X-Tenant-ID"); tenantIDStr != "" {
+			if tenantID, err := vo.ParseTenantID(tenantIDStr); err == nil {
+				ctx = logging.WithTenantID(ctx, tenantID)
+			}
 		}
 
 		// Set response header
@@ -116,9 +137,11 @@ func correlationMiddleware(next http.Handler) http.Handler {
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"status": "healthy",
-	})
+	}); err != nil {
+		logging.Error("Failed to encode health response", "error", err)
+	}
 }
 
 // readyHandler checks if all dependencies are available.
@@ -127,9 +150,11 @@ func readyHandler(cfg *config.Config) http.HandlerFunc {
 		// TODO: Add actual dependency checks (DB, Kafka) in future slices
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{
+		if err := json.NewEncoder(w).Encode(map[string]any{
 			"status":      "ready",
 			"environment": cfg.Environment,
-		})
+		}); err != nil {
+			logging.Error("Failed to encode ready response", "error", err)
+		}
 	}
 }

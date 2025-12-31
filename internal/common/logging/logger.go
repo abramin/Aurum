@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"aurum/internal/common/types"
+	types "aurum/internal/common/value_objects"
 )
 
 // Context keys for logging attributes
@@ -71,7 +71,7 @@ func CorrelationIDFromContext(ctx context.Context) types.CorrelationID {
 	if id, ok := ctx.Value(correlationIDKey).(types.CorrelationID); ok {
 		return id
 	}
-	return ""
+	return types.CorrelationID{}
 }
 
 // TenantIDFromContext extracts the tenant ID from context.
@@ -79,7 +79,7 @@ func TenantIDFromContext(ctx context.Context) types.TenantID {
 	if id, ok := ctx.Value(tenantIDKey).(types.TenantID); ok {
 		return id
 	}
-	return ""
+	return types.TenantID{}
 }
 
 // FromContext returns a logger with context attributes (correlation_id, tenant_id).
