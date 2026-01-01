@@ -12,6 +12,7 @@ import (
 
 // HTTP metrics
 var (
+	// HTTPRequestDuration tracks request latency by method, path, and status.
 	HTTPRequestDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "http_request_duration_seconds",
@@ -21,6 +22,7 @@ var (
 		[]string{"method", "path", "status"},
 	)
 
+	// HTTPRequestsTotal counts HTTP requests by method, path, and status.
 	HTTPRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "http_requests_total",
@@ -29,6 +31,7 @@ var (
 		[]string{"method", "path", "status"},
 	)
 
+	// HTTPRequestTimeout counts requests that hit the timeout threshold by path.
 	HTTPRequestTimeout = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "http_request_timeout_total",
@@ -40,6 +43,7 @@ var (
 
 // Database metrics
 var (
+	// DBTransactionDuration tracks transaction duration by operation label.
 	DBTransactionDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "db_transaction_duration_seconds",
@@ -49,6 +53,7 @@ var (
 		[]string{"operation"},
 	)
 
+	// DBOptimisticLockConflicts counts optimistic lock conflicts by repository.
 	DBOptimisticLockConflicts = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "db_optimistic_lock_conflicts_total",
@@ -57,6 +62,7 @@ var (
 		[]string{"repository"},
 	)
 
+	// DBPoolConnectionsInUse gauges the number of in-use database connections.
 	DBPoolConnectionsInUse = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "db_pool_connections_in_use",
@@ -64,6 +70,7 @@ var (
 		},
 	)
 
+	// DBPoolConnectionsIdle gauges the number of idle database connections.
 	DBPoolConnectionsIdle = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "db_pool_connections_idle",
@@ -74,6 +81,7 @@ var (
 
 // Outbox metrics
 var (
+	// OutboxPendingEvents gauges the number of unpublished outbox events.
 	OutboxPendingEvents = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "outbox_pending_events",
@@ -81,6 +89,7 @@ var (
 		},
 	)
 
+	// OutboxOldestUnpublishedAge gauges the age in seconds of the oldest unpublished event.
 	OutboxOldestUnpublishedAge = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "outbox_oldest_unpublished_age_seconds",
@@ -91,6 +100,7 @@ var (
 
 // Business metrics
 var (
+	// IdempotencyCacheHits counts cache hits for idempotency lookups.
 	IdempotencyCacheHits = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "idempotency_cache_hits_total",
@@ -98,6 +108,7 @@ var (
 		},
 	)
 
+	// AuthorizationsCreated counts created authorizations by status.
 	AuthorizationsCreated = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "authorization_created_total",
@@ -124,6 +135,7 @@ func (rw *responseWriter) WriteHeader(code int) {
 }
 
 // Middleware returns an HTTP middleware that records request metrics.
+// Side effects: records Prometheus metrics and reads the current time.
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Skip metrics endpoint itself
@@ -173,21 +185,25 @@ func normalizePath(path string) string {
 }
 
 // RecordOptimisticLockConflict increments the optimistic lock conflict counter.
+// Side effects: records a Prometheus metric.
 func RecordOptimisticLockConflict(repository string) {
 	DBOptimisticLockConflicts.WithLabelValues(repository).Inc()
 }
 
 // RecordTransactionDuration records a transaction duration.
+// Side effects: records a Prometheus metric.
 func RecordTransactionDuration(operation string, duration time.Duration) {
 	DBTransactionDuration.WithLabelValues(operation).Observe(duration.Seconds())
 }
 
 // RecordIdempotencyCacheHit increments the cache hit counter.
+// Side effects: records a Prometheus metric.
 func RecordIdempotencyCacheHit() {
 	IdempotencyCacheHits.Inc()
 }
 
 // RecordAuthorizationCreated increments the authorization counter.
+// Side effects: records a Prometheus metric.
 func RecordAuthorizationCreated(status string) {
 	AuthorizationsCreated.WithLabelValues(status).Inc()
 }

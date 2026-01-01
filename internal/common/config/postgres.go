@@ -8,7 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// NewPostgresPool creates a connection pool with the configured settings.
+// NewPostgresPool creates a Postgres connection pool with the configured settings.
+// Side effects: establishes network connections and pings the database.
 // Use this function when wiring up Postgres-backed datastores.
 func (c *Config) NewPostgresPool(ctx context.Context) (*pgxpool.Pool, error) {
 	poolConfig, err := pgxpool.ParseConfig(c.DatabaseURL)

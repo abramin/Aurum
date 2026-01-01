@@ -12,18 +12,21 @@ import (
 	"aurum/internal/spending/infrastructure/postgres/sqlc"
 )
 
-// IdempotencyStore implements domain.IdempotencyStore using PostgreSQL.
+// IdempotencyStore persists idempotency keys for request de-duplication.
+// It scopes lookups by tenant_id to maintain tenant isolation.
 type IdempotencyStore struct {
 	queries *sqlc.Queries
 }
 
-// NewIdempotencyStore creates a new IdempotencyStore.
+// NewIdempotencyStore binds sqlc queries to a database handle (pool or tx).
+// Callers control transactional scope by passing a pgx.Tx when participating in a unit of work.
 func NewIdempotencyStore(db sqlc.DBTX) *IdempotencyStore {
 	return &IdempotencyStore{queries: sqlc.New(db)}
 }
 
-// Get retrieves an idempotency entry by key.
+// Get retrieves an idempotency entry by tenant and key.
 // Returns (nil, nil) when no entry exists; absence is not treated as an error.
+// Errors: returns database errors on failure and domain.ErrCorruptData on invalid stored timestamps.
 func (s *IdempotencyStore) Get(ctx context.Context, tenantID types.TenantID, key string) (*domain.IdempotencyEntry, error) {
 	row, err := s.queries.GetIdempotencyEntry(ctx, sqlc.GetIdempotencyEntryParams{
 		TenantID:       tenantID.String(),
@@ -51,8 +54,10 @@ func (s *IdempotencyStore) Get(ctx context.Context, tenantID types.TenantID, key
 	}, nil
 }
 
-// Set stores an idempotency entry.
+// Set stores an idempotency entry, overwriting any existing entry for the key.
 // It upserts on (tenant_id, idempotency_key) and overwrites the stored response payload.
+// Side effects: writes to spending.idempotency_keys.
+// Errors: returns database errors on failure.
 func (s *IdempotencyStore) Set(ctx context.Context, entry *domain.IdempotencyEntry) error {
 	return s.queries.UpsertIdempotencyEntry(ctx, sqlc.UpsertIdempotencyEntryParams{
 		TenantID:       entry.TenantID.String(),
@@ -64,9 +69,11 @@ func (s *IdempotencyStore) Set(ctx context.Context, entry *domain.IdempotencyEnt
 	})
 }
 
-// SetIfAbsent atomically stores an entry if no entry exists.
-// It uses a CTE to attempt insert and return the existing row in a single round-trip.
+// SetIfAbsent atomically stores an entry if no entry exists for the tenant/key.
+// It uses a single-statement CTE to attempt insert and return the existing row.
+// Side effects: writes to spending.idempotency_keys when the insert wins.
 // Returns (true, entry, nil) if inserted, or (false, existing, nil) if already present.
+// Concurrency: safe under concurrent callers; only one insert should win.
 func (s *IdempotencyStore) SetIfAbsent(ctx context.Context, entry *domain.IdempotencyEntry) (bool, *domain.IdempotencyEntry, error) {
 	row, err := s.queries.InsertIdempotencyIfAbsent(ctx, sqlc.InsertIdempotencyIfAbsentParams{
 		TenantID:       entry.TenantID.String(),

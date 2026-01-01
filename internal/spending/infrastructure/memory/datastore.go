@@ -11,6 +11,7 @@ import (
 
 // DataStore implements domain.AtomicExecutor and domain.Repositories for testing.
 // It provides an in-memory implementation that supports the Atomic pattern.
+// Concurrency: all access is guarded by a mutex.
 type DataStore struct {
 	mu                sync.RWMutex
 	authorizations    map[string]*domain.Authorization
@@ -64,6 +65,7 @@ func (ds *DataStore) Outbox() domain.OutboxRepository {
 // Atomic executes the callback atomically.
 // It locks the store, runs the callback against a transactional snapshot,
 // and commits staged changes only if the callback succeeds.
+// Concurrency: the store is locked for the duration of the callback.
 func (ds *DataStore) Atomic(ctx context.Context, fn domain.AtomicCallback) error {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
@@ -258,6 +260,7 @@ func (r *txOutboxRepository) MarkPublished(ctx context.Context, ids []types.Even
 
 // Non-transactional repository implementations (for direct access)
 
+// AuthorizationRepository provides non-transactional access to in-memory authorizations.
 type AuthorizationRepository struct {
 	store *DataStore
 }
@@ -283,6 +286,7 @@ func (r *AuthorizationRepository) FindByID(ctx context.Context, tenantID types.T
 	return nil, domain.ErrAuthorizationNotFound
 }
 
+// CardAccountRepository provides non-transactional access to in-memory card accounts.
 type CardAccountRepository struct {
 	store *DataStore
 }
@@ -321,6 +325,7 @@ func (r *CardAccountRepository) FindByTenantID(ctx context.Context, tenantID typ
 	return nil, domain.ErrCardAccountNotFound
 }
 
+// IdempotencyStore provides non-transactional access to in-memory idempotency records.
 type IdempotencyStore struct {
 	store *DataStore
 }
@@ -359,6 +364,7 @@ func (s *IdempotencyStore) SetIfAbsent(ctx context.Context, entry *domain.Idempo
 	return true, entry, nil
 }
 
+// OutboxRepository provides non-transactional access to in-memory outbox entries.
 type OutboxRepository struct {
 	store *DataStore
 }

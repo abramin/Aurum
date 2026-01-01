@@ -10,6 +10,7 @@ import (
 // It only sets variables that are not already set in the environment.
 // Lines starting with # are treated as comments.
 // Empty lines are ignored.
+// Side effects: writes to the process environment via os.Setenv.
 func LoadEnvFile(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -48,6 +49,7 @@ func LoadEnvFile(path string) error {
 }
 
 // LoadEnvFileIfExists loads a .env file if it exists, otherwise does nothing.
+// Side effects: writes to the process environment if the file is present.
 func LoadEnvFileIfExists(path string) error {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil

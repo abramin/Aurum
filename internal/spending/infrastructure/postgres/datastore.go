@@ -12,6 +12,8 @@ import (
 	"aurum/internal/spending/domain"
 )
 
+// DataStore wires Postgres-backed repositories and provides transactional execution.
+// It is the infrastructure implementation of domain.Repositories and domain.AtomicExecutor.
 type DataStore struct {
 	pool              *pgxpool.Pool
 	authorizationRepo *AuthorizationRepository
@@ -21,6 +23,7 @@ type DataStore struct {
 }
 
 // NewDataStore creates a new DataStore with the given connection pool.
+// The pool is shared across repositories; pass a pgx.Tx for transactional scope via Atomic.
 func NewDataStore(pool *pgxpool.Pool) *DataStore {
 	return &DataStore{
 		pool:              pool,
@@ -70,6 +73,10 @@ func (ds *DataStore) withTx(tx pgx.Tx) *DataStore {
 //
 // - The service is responsible for requesting an atomic operation with procedures defined in the callback
 // - All concerns like commits and rollbacks are handled by the repository
+//
+// Side effects: begins/commits/rolls back a database transaction and records metrics.
+// Concurrency: the callback observes a single transaction via repository instances bound to the tx.
+// Errors: returns database errors on begin/commit/rollback failures.
 func (ds *DataStore) Atomic(ctx context.Context, fn domain.AtomicCallback) (err error) {
 	start := time.Now()
 

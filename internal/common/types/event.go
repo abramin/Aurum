@@ -18,6 +18,7 @@ type EventEnvelope struct {
 }
 
 // NewEventEnvelope creates a new event envelope with generated ID and timestamp.
+// Side effects: marshals the payload to JSON and reads the current time.
 func NewEventEnvelope(
 	eventType string,
 	tenantID TenantID,

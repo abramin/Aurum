@@ -9,8 +9,11 @@ import (
 
 // Common currency codes
 const (
+	// CurrencyEUR is the ISO 4217 code for Euro.
 	CurrencyEUR = "EUR"
+	// CurrencyUSD is the ISO 4217 code for US Dollar.
 	CurrencyUSD = "USD"
+	// CurrencyGBP is the ISO 4217 code for British Pound.
 	CurrencyGBP = "GBP"
 )
 

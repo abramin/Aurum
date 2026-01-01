@@ -13,22 +13,26 @@ import (
 	"aurum/internal/spending/infrastructure/postgres/sqlc"
 )
 
-// AuthorizationRepository implements domain.AuthorizationRepository using PostgreSQL.
+// AuthorizationRepository persists Authorization aggregates using PostgreSQL.
+// It scopes reads by tenant_id and writes the tenant_id from the aggregate to enforce tenant isolation.
 type AuthorizationRepository struct {
 	queries *sqlc.Queries
 }
 
-// NewAuthorizationRepository creates a new AuthorizationRepository.
+// NewAuthorizationRepository binds sqlc queries to a database handle (pool or tx).
+// Callers control transactional scope by passing a pgx.Tx when participating in a unit of work.
 func NewAuthorizationRepository(db sqlc.DBTX) *AuthorizationRepository {
 	return &AuthorizationRepository{queries: sqlc.New(db)}
 }
 
-// Save persists an authorization to the database.
+// Save persists an Authorization aggregate to the database.
 // It uses an UPSERT with optimistic locking:
 //   - Inserts when version == 1
 //   - Updates only if the stored version matches (version - 1)
 //
-// Returns ErrOptimisticLock when a concurrent update wins the version check.
+// Side effects: writes to spending.authorizations.
+// Errors: returns domain.ErrOptimisticLock on version conflict; returns database errors on failure.
+// Concurrency: uses optimistic locking via the version check.
 func (r *AuthorizationRepository) Save(ctx context.Context, auth *domain.Authorization) error {
 	rows, err := r.queries.UpsertAuthorization(ctx, sqlc.UpsertAuthorizationParams{
 		ID:                 uuid.UUID(auth.ID()),
@@ -58,9 +62,11 @@ func (r *AuthorizationRepository) Save(ctx context.Context, auth *domain.Authori
 	return nil
 }
 
-// FindByID retrieves an authorization by ID.
+// FindByID retrieves an Authorization aggregate by ID.
 // It queries by tenant and ID, maps missing rows to ErrAuthorizationNotFound,
 // validates stored IDs/state, and reconstructs the aggregate from stored values.
+// Errors: returns domain.ErrAuthorizationNotFound when missing and domain.ErrCorruptData
+// when stored values violate invariants or cannot be decoded.
 func (r *AuthorizationRepository) FindByID(ctx context.Context, tenantID types.TenantID, id domain.AuthorizationID) (*domain.Authorization, error) {
 	row, err := r.queries.GetAuthorizationByID(ctx, sqlc.GetAuthorizationByIDParams{
 		ID:       uuid.UUID(id),

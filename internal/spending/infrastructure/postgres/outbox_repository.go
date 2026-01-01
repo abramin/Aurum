@@ -10,22 +10,22 @@ import (
 	"aurum/internal/spending/infrastructure/postgres/sqlc"
 )
 
-// OutboxRepository implements domain.OutboxRepository using PostgreSQL.
-// This implements the outbox pattern for reliable event publishing.
-//
-// Events are written to the outbox within the same transaction as domain changes,
-// then published asynchronously by a separate process (outbox publisher).
+// OutboxRepository persists OutboxEntry records to implement the outbox pattern.
+// Events should be appended within the same transaction as aggregate changes,
+// then published asynchronously by a separate process.
 type OutboxRepository struct {
 	queries *sqlc.Queries
 }
 
-// NewOutboxRepository creates a new OutboxRepository.
+// NewOutboxRepository binds sqlc queries to a database handle (pool or tx).
+// Callers control transactional scope by passing a pgx.Tx when participating in a unit of work.
 func NewOutboxRepository(db sqlc.DBTX) *OutboxRepository {
 	return &OutboxRepository{queries: sqlc.New(db)}
 }
 
 // Append adds an event to the outbox.
-// It persists the event payload and metadata as part of the current transaction.
+// Side effects: writes to spending.outbox.
+// Usage: call within the same transaction as the aggregate change to preserve atomicity.
 func (r *OutboxRepository) Append(ctx context.Context, entry *domain.OutboxEntry) error {
 	return r.queries.InsertOutboxEntry(ctx, sqlc.InsertOutboxEntryParams{
 		EventID:       entry.ID.String(),
@@ -39,8 +39,8 @@ func (r *OutboxRepository) Append(ctx context.Context, entry *domain.OutboxEntry
 }
 
 // FetchUnpublished retrieves unpublished events for publishing.
-// It locks rows with FOR UPDATE SKIP LOCKED to support concurrent publishers,
-// ordering by occurred_at to maintain event ordering.
+// It uses FOR UPDATE SKIP LOCKED to support concurrent publishers and orders by occurred_at.
+// Concurrency: wrap this call in a transaction if you need locks to survive until MarkPublished.
 func (r *OutboxRepository) FetchUnpublished(ctx context.Context, limit int) ([]*domain.OutboxEntry, error) {
 	rows, err := r.queries.ListUnpublishedOutbox(ctx, int32(limit))
 	if err != nil {
@@ -73,7 +73,8 @@ func (r *OutboxRepository) FetchUnpublished(ctx context.Context, limit int) ([]*
 	return entries, nil
 }
 
-// MarkPublished marks events as published.
+// MarkPublished marks events as published with the current time.
+// Side effects: writes to spending.outbox.
 // It is a no-op when the input list is empty.
 func (r *OutboxRepository) MarkPublished(ctx context.Context, ids []types.EventID) error {
 	if len(ids) == 0 {

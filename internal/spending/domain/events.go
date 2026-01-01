@@ -9,9 +9,13 @@ import (
 
 // Event types for the Spending context.
 const (
+	// EventTypeSpendAuthorized identifies a spend authorization event.
 	EventTypeSpendAuthorized = "spend.authorized"
+	// EventTypeSpendCaptured identifies a spend capture event.
 	EventTypeSpendCaptured   = "spend.captured"
+	// EventTypeSpendReversed identifies a spend reversal event.
 	EventTypeSpendReversed   = "spend.reversed"
+	// EventTypeSpendExpired identifies a spend expiration event.
 	EventTypeSpendExpired    = "spend.expired"
 )
 
@@ -45,6 +49,7 @@ type SpendReversedEvent struct {
 }
 
 // NewSpendAuthorizedOutboxEntry creates an outbox entry for SpendAuthorized event.
+// Side effects: reads the current time and marshals the event payload to JSON.
 func NewSpendAuthorizedOutboxEntry(
 	auth *Authorization,
 	correlationID types.CorrelationID,
@@ -75,6 +80,7 @@ func NewSpendAuthorizedOutboxEntry(
 }
 
 // NewSpendCapturedOutboxEntry creates an outbox entry for SpendCaptured event.
+// Side effects: reads the current time and marshals the event payload to JSON.
 func NewSpendCapturedOutboxEntry(
 	auth *Authorization,
 	correlationID types.CorrelationID,
@@ -103,6 +109,7 @@ func NewSpendCapturedOutboxEntry(
 }
 
 // NewSpendReversedOutboxEntry creates an outbox entry for SpendReversed event.
+// Side effects: reads the current time and marshals the event payload to JSON.
 func NewSpendReversedOutboxEntry(
 	auth *Authorization,
 	correlationID types.CorrelationID,
