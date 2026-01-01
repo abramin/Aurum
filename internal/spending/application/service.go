@@ -130,17 +130,17 @@ type CreateAuthorizationResponse struct {
 //   - Writes SpendAuthorized event to outbox
 //   - All within a single atomic transaction
 func (s *SpendingService) CreateAuthorization(ctx context.Context, req CreateAuthorizationRequest) (*CreateAuthorizationResponse, error) {
+	// Check idempotency OUTSIDE transaction - fast path for replays
+	// This read is already atomic and shortens transaction duration
+	if cached, err := checkIdempotency[CreateAuthorizationResponse](ctx, s.repos.IdempotencyStore(), req.TenantID, req.IdempotencyKey); err != nil {
+		return nil, err
+	} else if cached != nil {
+		return cached, nil
+	}
+
 	var result *CreateAuthorizationResponse
 
 	err := s.dataStore.Atomic(ctx, func(repos domain.Repositories) error {
-		// Check idempotency - fast path for replays
-		if cached, err := checkIdempotency[CreateAuthorizationResponse](ctx, repos.IdempotencyStore(), req.TenantID, req.IdempotencyKey); err != nil {
-			return err
-		} else if cached != nil {
-			result = cached
-			return nil
-		}
-
 		now := time.Now()
 
 		// Get card account for tenant
@@ -240,17 +240,17 @@ type CaptureAuthorizationResponse struct {
 //   - Writes SpendCaptured event to outbox
 //   - All within a single atomic transaction
 func (s *SpendingService) CaptureAuthorization(ctx context.Context, req CaptureAuthorizationRequest) (*CaptureAuthorizationResponse, error) {
+	// Check idempotency OUTSIDE transaction - fast path for replays
+	// This read is already atomic and shortens transaction duration
+	if cached, err := checkIdempotency[CaptureAuthorizationResponse](ctx, s.repos.IdempotencyStore(), req.TenantID, req.IdempotencyKey); err != nil {
+		return nil, err
+	} else if cached != nil {
+		return cached, nil
+	}
+
 	var result *CaptureAuthorizationResponse
 
 	err := s.dataStore.Atomic(ctx, func(repos domain.Repositories) error {
-		// Check idempotency - fast path for replays
-		if cached, err := checkIdempotency[CaptureAuthorizationResponse](ctx, repos.IdempotencyStore(), req.TenantID, req.IdempotencyKey); err != nil {
-			return err
-		} else if cached != nil {
-			result = cached
-			return nil
-		}
-
 		now := time.Now()
 
 		// Get authorization
@@ -416,17 +416,17 @@ type ReverseAuthorizationResponse struct {
 //   - Writes SpendReversed event to outbox
 //   - All within a single atomic transaction
 func (s *SpendingService) ReverseAuthorization(ctx context.Context, req ReverseAuthorizationRequest) (*ReverseAuthorizationResponse, error) {
+	// Check idempotency OUTSIDE transaction - fast path for replays
+	// This read is already atomic and shortens transaction duration
+	if cached, err := checkIdempotency[ReverseAuthorizationResponse](ctx, s.repos.IdempotencyStore(), req.TenantID, req.IdempotencyKey); err != nil {
+		return nil, err
+	} else if cached != nil {
+		return cached, nil
+	}
+
 	var result *ReverseAuthorizationResponse
 
 	err := s.dataStore.Atomic(ctx, func(repos domain.Repositories) error {
-		// Check idempotency - fast path for replays
-		if cached, err := checkIdempotency[ReverseAuthorizationResponse](ctx, repos.IdempotencyStore(), req.TenantID, req.IdempotencyKey); err != nil {
-			return err
-		} else if cached != nil {
-			result = cached
-			return nil
-		}
-
 		now := time.Now()
 
 		// Get authorization

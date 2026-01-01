@@ -24,60 +24,43 @@ func NewCardAccountRepository(db Executor) *CardAccountRepository {
 }
 
 // Save persists a card account to the database.
-// Uses optimistic locking via version column to prevent concurrent modification conflicts.
+// Uses UPSERT with optimistic locking to prevent concurrent modification conflicts.
+// Single round-trip: INSERT on new, UPDATE on existing (with version check).
 func (r *CardAccountRepository) Save(ctx context.Context, account *domain.CardAccount) error {
-	// Check if account already exists
-	var existingVersion int
-	err := r.db.QueryRow(ctx,
-		`SELECT version FROM spending.card_accounts WHERE id = $1 AND tenant_id = $2`,
-		account.ID().String(), account.TenantID().String(),
-	).Scan(&existingVersion)
-
-	if errors.Is(err, pgx.ErrNoRows) {
-		// Insert new account
-		_, err = r.db.Exec(ctx, `
-			INSERT INTO spending.card_accounts (
-				id, tenant_id,
-				spending_limit_amount, spending_limit_currency,
-				rolling_spend_amount, rolling_spend_currency,
-				version, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			account.ID().String(),
-			account.TenantID().String(),
-			account.SpendingLimit().Amount,
-			account.SpendingLimit().Currency,
-			account.RollingSpend().Amount,
-			account.RollingSpend().Currency,
-			account.Version(),
-			account.CreatedAt(),
-			account.UpdatedAt(),
-		)
-		return err
-	}
-	if err != nil {
-		return err
-	}
-
-	// Update existing account with optimistic locking
+	// Use UPSERT pattern: INSERT ... ON CONFLICT DO UPDATE with version check
+	// For new records (version=1): inserts successfully
+	// For existing records: updates only if version matches (optimistic lock)
 	tag, err := r.db.Exec(ctx, `
-		UPDATE spending.card_accounts
-		SET rolling_spend_amount = $1,
-			rolling_spend_currency = $2,
-			version = $3,
-			updated_at = $4
-		WHERE id = $5 AND tenant_id = $6 AND version = $7`,
+		INSERT INTO spending.card_accounts (
+			id, tenant_id,
+			spending_limit_amount, spending_limit_currency,
+			rolling_spend_amount, rolling_spend_currency,
+			version, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (id) DO UPDATE SET
+			rolling_spend_amount = EXCLUDED.rolling_spend_amount,
+			rolling_spend_currency = EXCLUDED.rolling_spend_currency,
+			version = EXCLUDED.version,
+			updated_at = EXCLUDED.updated_at
+		WHERE spending.card_accounts.version = EXCLUDED.version - 1`,
+		account.ID().String(),
+		account.TenantID().String(),
+		account.SpendingLimit().Amount,
+		account.SpendingLimit().Currency,
 		account.RollingSpend().Amount,
 		account.RollingSpend().Currency,
 		account.Version(),
+		account.CreatedAt(),
 		account.UpdatedAt(),
-		account.ID().String(),
-		account.TenantID().String(),
-		existingVersion,
 	)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+
+	// For updates, if version didn't match, no rows affected
+	// For inserts, version=1 so we expect 1 row
+	// Check: version > 1 means update, and 0 rows = conflict
+	if account.Version() > 1 && tag.RowsAffected() == 0 {
 		return domain.ErrOptimisticLock
 	}
 	return nil

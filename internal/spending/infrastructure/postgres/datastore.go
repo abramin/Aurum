@@ -3,10 +3,12 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"aurum/internal/common/metrics"
 	"aurum/internal/spending/domain"
 )
 
@@ -69,6 +71,8 @@ func (ds *DataStore) withTx(tx pgx.Tx) *DataStore {
 // - The service is responsible for requesting an atomic operation with procedures defined in the callback
 // - All concerns like commits and rollbacks are handled by the repository
 func (ds *DataStore) Atomic(ctx context.Context, fn domain.AtomicCallback) (err error) {
+	start := time.Now()
+
 	tx, err := ds.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
@@ -76,9 +80,12 @@ func (ds *DataStore) Atomic(ctx context.Context, fn domain.AtomicCallback) (err 
 
 	// Use defer to handle both errors and panics
 	defer func() {
+		duration := time.Since(start)
+
 		if p := recover(); p != nil {
 			// Rollback on panic
 			_ = tx.Rollback(ctx)
+			metrics.RecordTransactionDuration("panic", duration)
 			panic(p) // Re-throw the panic
 		}
 		if err != nil {
@@ -86,11 +93,15 @@ func (ds *DataStore) Atomic(ctx context.Context, fn domain.AtomicCallback) (err 
 			if rbErr := tx.Rollback(ctx); rbErr != nil {
 				err = fmt.Errorf("tx error: %v, rollback error: %v", err, rbErr)
 			}
+			metrics.RecordTransactionDuration("rollback", duration)
 		} else {
 			// Commit on success
 			err = tx.Commit(ctx)
 			if err != nil {
 				err = fmt.Errorf("commit transaction: %w", err)
+				metrics.RecordTransactionDuration("commit_error", duration)
+			} else {
+				metrics.RecordTransactionDuration("commit", duration)
 			}
 		}
 	}()

@@ -12,6 +12,7 @@ import (
 
 	"aurum/internal/common/config"
 	"aurum/internal/common/logging"
+	"aurum/internal/common/metrics"
 	"aurum/internal/common/types"
 	spendingapi "aurum/internal/spending/api"
 	"aurum/internal/spending/application"
@@ -50,6 +51,9 @@ func main() {
 	// Ready check endpoint (checks dependencies)
 	mux.HandleFunc("GET /ready", readyHandler(cfg))
 
+	// Prometheus metrics endpoint
+	mux.Handle("GET /metrics", metrics.Handler())
+
 	// Setup Spending context with in-memory datastore
 	// In production, this would use postgres.NewDataStore(pool) instead
 	spendingDataStore := memory.NewDataStore()
@@ -59,9 +63,12 @@ func main() {
 
 	logging.InfoContext(startupCtx, "Spending context initialized")
 
+	// Middleware chain: metrics -> correlation -> handler
+	handler := metrics.Middleware(correlationMiddleware(mux))
+
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
-		Handler:      correlationMiddleware(mux),
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
