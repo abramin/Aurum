@@ -52,9 +52,6 @@ type Repositories interface {
 // Any error returned will cause the transaction to be rolled back.
 type AtomicCallback func(repos Repositories) error
 
-// AtomicExecutor provides atomic transaction execution following the Qonto pattern.
-// See: https://medium.com/qonto-way/transactions-in-go-hexagonal-architecture-f12c7a817a61
-//
 // The service is responsible for requesting an atomic operation with a set of
 // procedures defined in the callback. All other concerns like commits and rollbacks
 // are left for the repository to implement.

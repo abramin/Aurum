@@ -4,135 +4,126 @@ import (
 	"testing"
 
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/suite"
 
 	"aurum/internal/common/types"
 	"aurum/internal/spending/domain"
 )
 
-func TestCardAccount_AuthorizeAmount(t *testing.T) {
-	tenantID := types.TenantID("tenant-1")
-	limit := types.NewMoney(decimal.NewFromInt(1000), types.CurrencyEUR)
+// CardAccountSuite tests CardAccount aggregate behavior.
+//
+// Justification for unit tests: These tests provide fast feedback on spending limit
+// invariants. The same behaviors are covered at integration level via feature files,
+// but unit tests catch regressions before slower integration tests run.
+type CardAccountSuite struct {
+	suite.Suite
+	tenantID types.TenantID
+	limit    types.Money
+}
 
-	t.Run("successful authorization within limit", func(t *testing.T) {
-		account := domain.NewCardAccount(tenantID, limit)
+func TestCardAccountSuite(t *testing.T) {
+	suite.Run(t, new(CardAccountSuite))
+}
 
+func (s *CardAccountSuite) SetupTest() {
+	s.tenantID = types.TenantID("tenant-1")
+	s.limit = types.NewMoney(decimal.NewFromInt(1000), types.CurrencyEUR)
+}
+
+func (s *CardAccountSuite) newCardAccount() *domain.CardAccount {
+	return domain.NewCardAccount(s.tenantID, s.limit)
+}
+
+// TestSpendLimitEnforcement validates that authorizations respect the spending limit.
+func (s *CardAccountSuite) TestSpendLimitEnforcement() {
+	s.Run("authorizes single amount within limit", func() {
+		account := s.newCardAccount()
 		amount := types.NewMoney(decimal.NewFromInt(100), types.CurrencyEUR)
+
 		err := account.AuthorizeAmount(amount)
 
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-		if !account.RollingSpend().Equal(amount) {
-			t.Errorf("expected rolling spend %s, got %s", amount.String(), account.RollingSpend().String())
-		}
+		s.Require().NoError(err)
+		s.True(account.RollingSpend().Equal(amount))
 	})
 
-	t.Run("multiple authorizations within limit", func(t *testing.T) {
-		account := domain.NewCardAccount(tenantID, limit)
-
+	s.Run("authorizes multiple amounts within cumulative limit", func() {
+		account := s.newCardAccount()
 		amount := types.NewMoney(decimal.NewFromInt(300), types.CurrencyEUR)
+
 		_ = account.AuthorizeAmount(amount)
 		_ = account.AuthorizeAmount(amount)
 		err := account.AuthorizeAmount(amount)
 
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
+		s.Require().NoError(err)
 		expectedSpend := types.NewMoney(decimal.NewFromInt(900), types.CurrencyEUR)
-		if !account.RollingSpend().Equal(expectedSpend) {
-			t.Errorf("expected rolling spend %s, got %s", expectedSpend.String(), account.RollingSpend().String())
-		}
+		s.True(account.RollingSpend().Equal(expectedSpend))
 	})
 
-	t.Run("authorization exceeds limit", func(t *testing.T) {
-		account := domain.NewCardAccount(tenantID, limit)
-
+	s.Run("rejects single authorization exceeding limit", func() {
+		account := s.newCardAccount()
 		amount := types.NewMoney(decimal.NewFromInt(1500), types.CurrencyEUR)
+
 		err := account.AuthorizeAmount(amount)
 
-		if err != domain.ErrSpendingLimitExceeded {
-			t.Errorf("expected ErrSpendingLimitExceeded, got %v", err)
-		}
-		if !account.RollingSpend().IsZero() {
-			t.Errorf("expected rolling spend to be zero, got %s", account.RollingSpend().String())
-		}
+		s.ErrorIs(err, domain.ErrSpendingLimitExceeded)
+		s.True(account.RollingSpend().IsZero(), "rolling spend should remain zero on rejection")
 	})
 
-	t.Run("cumulative authorization exceeds limit", func(t *testing.T) {
-		account := domain.NewCardAccount(tenantID, limit)
-
+	s.Run("rejects cumulative authorization exceeding limit", func() {
+		account := s.newCardAccount()
 		amount := types.NewMoney(decimal.NewFromInt(600), types.CurrencyEUR)
 		_ = account.AuthorizeAmount(amount)
 
 		err := account.AuthorizeAmount(amount) // Total would be 1200 > 1000
 
-		if err != domain.ErrSpendingLimitExceeded {
-			t.Errorf("expected ErrSpendingLimitExceeded, got %v", err)
-		}
-		// Rolling spend should remain at first authorization
-		if !account.RollingSpend().Equal(amount) {
-			t.Errorf("expected rolling spend %s, got %s", amount.String(), account.RollingSpend().String())
-		}
+		s.ErrorIs(err, domain.ErrSpendingLimitExceeded)
+		s.True(account.RollingSpend().Equal(amount), "rolling spend should remain at first authorization")
 	})
 
-	t.Run("authorization with different currency fails", func(t *testing.T) {
-		account := domain.NewCardAccount(tenantID, limit)
-
+	s.Run("rejects authorization with currency mismatch", func() {
+		account := s.newCardAccount()
 		amount := types.NewMoney(decimal.NewFromInt(100), types.CurrencyUSD)
+
 		err := account.AuthorizeAmount(amount)
 
-		if err != domain.ErrCurrencyMismatch {
-			t.Errorf("expected ErrCurrencyMismatch, got %v", err)
-		}
+		s.ErrorIs(err, domain.ErrCurrencyMismatch)
 	})
 
-	t.Run("available limit decreases with authorizations", func(t *testing.T) {
-		account := domain.NewCardAccount(tenantID, limit)
-
+	s.Run("decreases available limit with authorizations", func() {
+		account := s.newCardAccount()
 		amount := types.NewMoney(decimal.NewFromInt(400), types.CurrencyEUR)
+
 		_ = account.AuthorizeAmount(amount)
 
 		available := account.AvailableLimit()
 		expected := types.NewMoney(decimal.NewFromInt(600), types.CurrencyEUR)
-		if !available.Equal(expected) {
-			t.Errorf("expected available limit %s, got %s", expected.String(), available.String())
-		}
+		s.True(available.Equal(expected))
 	})
 }
 
-func TestCardAccount_ReleaseAmount(t *testing.T) {
-	tenantID := types.TenantID("tenant-1")
-	limit := types.NewMoney(decimal.NewFromInt(1000), types.CurrencyEUR)
-
-	t.Run("successful release", func(t *testing.T) {
-		account := domain.NewCardAccount(tenantID, limit)
-
+// TestAmountRelease validates that reversals restore available spending capacity.
+func (s *CardAccountSuite) TestAmountRelease() {
+	s.Run("releases amount back to available limit", func() {
+		account := s.newCardAccount()
 		authAmount := types.NewMoney(decimal.NewFromInt(500), types.CurrencyEUR)
 		_ = account.AuthorizeAmount(authAmount)
 
 		releaseAmount := types.NewMoney(decimal.NewFromInt(200), types.CurrencyEUR)
 		err := account.ReleaseAmount(releaseAmount)
 
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
+		s.Require().NoError(err)
 		expected := types.NewMoney(decimal.NewFromInt(300), types.CurrencyEUR)
-		if !account.RollingSpend().Equal(expected) {
-			t.Errorf("expected rolling spend %s, got %s", expected.String(), account.RollingSpend().String())
-		}
+		s.True(account.RollingSpend().Equal(expected))
 	})
 
-	t.Run("release with different currency fails", func(t *testing.T) {
-		account := domain.NewCardAccount(tenantID, limit)
-
+	s.Run("rejects release with currency mismatch", func() {
+		account := s.newCardAccount()
 		authAmount := types.NewMoney(decimal.NewFromInt(500), types.CurrencyEUR)
 		_ = account.AuthorizeAmount(authAmount)
 
 		releaseAmount := types.NewMoney(decimal.NewFromInt(200), types.CurrencyUSD)
 		err := account.ReleaseAmount(releaseAmount)
 
-		if err != domain.ErrCurrencyMismatch {
-			t.Errorf("expected ErrCurrencyMismatch, got %v", err)
-		}
+		s.ErrorIs(err, domain.ErrCurrencyMismatch)
 	})
 }

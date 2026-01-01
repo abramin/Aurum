@@ -12,14 +12,11 @@ import (
 )
 
 // SpendingService implements the application layer for the Spending context.
-// It uses the Atomic pattern from Qonto for transaction management.
 //
 // Key design decisions:
 //   - All state-changing operations use the Atomic callback pattern
 //   - Domain events are written to the outbox within the same transaction
 //   - Idempotency is enforced at the service layer
-//
-// See: https://medium.com/qonto-way/transactions-in-go-hexagonal-architecture-f12c7a817a61
 type SpendingService struct {
 	dataStore domain.AtomicExecutor
 	repos     domain.Repositories
@@ -162,6 +159,7 @@ type CaptureAuthorizationRequest struct {
 type CaptureAuthorizationResponse struct {
 	AuthorizationID string `json:"authorization_id"`
 	Status          string `json:"status"`
+	CapturedAmount  string `json:"captured_amount"`
 }
 
 // CaptureAuthorization captures an existing authorization.
@@ -219,6 +217,7 @@ func (s *SpendingService) CaptureAuthorization(ctx context.Context, req CaptureA
 		result = &CaptureAuthorizationResponse{
 			AuthorizationID: auth.ID().String(),
 			Status:          string(auth.State()),
+			CapturedAmount:  auth.CapturedAmount().String(),
 		}
 
 		// Store idempotency entry
@@ -323,4 +322,140 @@ func (s *SpendingService) CreateCardAccount(ctx context.Context, req CreateCardA
 	})
 
 	return result, err
+}
+
+// ReverseAuthorizationRequest represents a request to reverse an authorization.
+type ReverseAuthorizationRequest struct {
+	TenantID        types.TenantID
+	AuthorizationID domain.AuthorizationID
+	IdempotencyKey  string
+	CorrelationID   types.CorrelationID
+}
+
+// ReverseAuthorizationResponse represents the response from reversing an authorization.
+type ReverseAuthorizationResponse struct {
+	AuthorizationID string `json:"authorization_id"`
+	Status          string `json:"status"`
+}
+
+// ReverseAuthorization reverses an existing authorization, releasing the held amount.
+// This operation:
+//   - Checks idempotency key and returns existing response if found
+//   - Validates authorization can be reversed (not already captured)
+//   - Updates authorization to Reversed state
+//   - Releases the held amount from the card account
+//   - Writes SpendReversed event to outbox
+//   - All within a single atomic transaction
+func (s *SpendingService) ReverseAuthorization(ctx context.Context, req ReverseAuthorizationRequest) (*ReverseAuthorizationResponse, error) {
+	var result *ReverseAuthorizationResponse
+
+	err := s.dataStore.Atomic(ctx, func(repos domain.Repositories) error {
+		// Check idempotency
+		existing, err := repos.IdempotencyStore().Get(ctx, req.TenantID, req.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			// Replay existing response
+			var resp ReverseAuthorizationResponse
+			if err := json.Unmarshal(existing.ResponseBody, &resp); err != nil {
+				return err
+			}
+			result = &resp
+			return nil
+		}
+
+		// Get authorization
+		auth, err := repos.Authorizations().FindByID(ctx, req.TenantID, req.AuthorizationID)
+		if err != nil {
+			return err
+		}
+
+		// Get card account to release the amount
+		cardAccount, err := repos.CardAccounts().FindByID(ctx, req.TenantID, auth.CardAccountID())
+		if err != nil {
+			return err
+		}
+
+		// Reverse authorization
+		if err := auth.Reverse(); err != nil {
+			return err
+		}
+
+		// Release the authorized amount from the card account
+		if err := cardAccount.ReleaseAmount(auth.AuthorizedAmount()); err != nil {
+			return err
+		}
+
+		// Save card account
+		if err := repos.CardAccounts().Save(ctx, cardAccount); err != nil {
+			return err
+		}
+
+		// Save authorization
+		if err := repos.Authorizations().Save(ctx, auth); err != nil {
+			return err
+		}
+
+		// Write event to outbox
+		outboxEntry, err := domain.NewSpendReversedOutboxEntry(auth, req.CorrelationID)
+		if err != nil {
+			return err
+		}
+		if err := repos.Outbox().Append(ctx, outboxEntry); err != nil {
+			return err
+		}
+
+		// Prepare response
+		result = &ReverseAuthorizationResponse{
+			AuthorizationID: auth.ID().String(),
+			Status:          string(auth.State()),
+		}
+
+		// Store idempotency entry
+		responseBody, _ := json.Marshal(result)
+		if err := repos.IdempotencyStore().Set(ctx, &domain.IdempotencyEntry{
+			TenantID:       req.TenantID,
+			IdempotencyKey: req.IdempotencyKey,
+			ResourceID:     auth.ID().String(),
+			StatusCode:     http.StatusOK,
+			ResponseBody:   responseBody,
+			CreatedAt:      time.Now(),
+		}); err != nil {
+			return err
+		}
+
+		logging.InfoContext(ctx, "Authorization reversed",
+			"authorization_id", auth.ID().String(),
+			"tenant_id", req.TenantID.String(),
+			"reversed_amount", auth.AuthorizedAmount().String(),
+		)
+
+		return nil
+	})
+
+	return result, err
+}
+
+// GetCardAccountResponse represents the response from getting a card account.
+type GetCardAccountResponse struct {
+	CardAccountID  string      `json:"card_account_id"`
+	SpendingLimit  types.Money `json:"spending_limit"`
+	RollingSpend   types.Money `json:"rolling_spend"`
+	AvailableLimit types.Money `json:"available_limit"`
+}
+
+// GetCardAccount retrieves a card account by tenant ID.
+func (s *SpendingService) GetCardAccount(ctx context.Context, tenantID types.TenantID) (*GetCardAccountResponse, error) {
+	cardAccount, err := s.repos.CardAccounts().FindByTenantID(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &GetCardAccountResponse{
+		CardAccountID:  cardAccount.ID().String(),
+		SpendingLimit:  cardAccount.SpendingLimit(),
+		RollingSpend:   cardAccount.RollingSpend(),
+		AvailableLimit: cardAccount.AvailableLimit(),
+	}, nil
 }

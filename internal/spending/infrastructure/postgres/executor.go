@@ -9,10 +9,10 @@ import (
 )
 
 // Executor abstracts database operations that work with both pool and transaction.
-// This follows the Qonto pattern of defining an interface with shared methods
-// between *sql.DB and *sql.Tx (in our case, *pgxpool.Pool and pgx.Tx).
 //
-// See: https://medium.com/qonto-way/transactions-in-go-hexagonal-architecture-f12c7a817a61
+//	pattern of defining an interface with shared methods
+//
+// between *sql.DB and *sql.Tx (in our case, *pgxpool.Pool and pgx.Tx).
 type Executor interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)

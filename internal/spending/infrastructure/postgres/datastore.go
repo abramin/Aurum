@@ -10,11 +10,6 @@ import (
 	"aurum/internal/spending/domain"
 )
 
-// DataStore implements domain.AtomicExecutor and domain.Repositories.
-// It manages database connections and provides atomic transaction execution
-// following the Qonto pattern.
-//
-// See: https://medium.com/qonto-way/transactions-in-go-hexagonal-architecture-f12c7a817a61
 type DataStore struct {
 	pool              *pgxpool.Pool
 	authorizationRepo *AuthorizationRepository
@@ -71,11 +66,8 @@ func (ds *DataStore) withTx(tx pgx.Tx) *DataStore {
 // If the callback returns nil, the transaction is committed.
 // If the callback returns an error or panics, the transaction is rolled back.
 //
-// This implements the Qonto pattern where:
 // - The service is responsible for requesting an atomic operation with procedures defined in the callback
 // - All concerns like commits and rollbacks are handled by the repository
-//
-// See: https://medium.com/qonto-way/transactions-in-go-hexagonal-architecture-f12c7a817a61
 func (ds *DataStore) Atomic(ctx context.Context, fn domain.AtomicCallback) (err error) {
 	tx, err := ds.pool.Begin(ctx)
 	if err != nil {

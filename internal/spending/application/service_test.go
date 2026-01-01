@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/suite"
 
 	"aurum/internal/common/types"
 	"aurum/internal/spending/application"
@@ -12,255 +13,206 @@ import (
 	"aurum/internal/spending/infrastructure/memory"
 )
 
-func TestSpendingService_CreateAuthorization(t *testing.T) {
-	ctx := context.Background()
-	tenantID := types.TenantID("tenant-1")
-	correlationID := types.NewCorrelationID()
+// SpendingServiceSuite tests the SpendingService application layer.
+//
+// Justification: These tests validate orchestration concerns (idempotency key handling,
+// repository coordination) that span multiple domain objects. This layer is the natural
+// integration point before HTTP/feature tests.
+type SpendingServiceSuite struct {
+	suite.Suite
+	ctx           context.Context
+	tenantID      types.TenantID
+	correlationID types.CorrelationID
+}
 
-	t.Run("successful authorization within limit", func(t *testing.T) {
-		dataStore := memory.NewDataStore()
-		service := application.NewSpendingService(dataStore)
+func TestSpendingServiceSuite(t *testing.T) {
+	suite.Run(t, new(SpendingServiceSuite))
+}
 
-		// First create a card account
+func (s *SpendingServiceSuite) SetupTest() {
+	s.ctx = context.Background()
+	s.tenantID = types.TenantID("tenant-1")
+	s.correlationID = types.NewCorrelationID()
+}
+
+func (s *SpendingServiceSuite) newService() *application.SpendingService {
+	dataStore := memory.NewDataStore()
+	return application.NewSpendingService(dataStore)
+}
+
+func (s *SpendingServiceSuite) createCardAccount(service *application.SpendingService, limit types.Money) {
+	_, err := service.CreateCardAccount(s.ctx, application.CreateCardAccountRequest{
+		TenantID:      s.tenantID,
+		SpendingLimit: limit,
+	})
+	s.Require().NoError(err)
+}
+
+// TestAuthorizationWorkflow validates the end-to-end authorization creation flow.
+func (s *SpendingServiceSuite) TestAuthorizationWorkflow() {
+	s.Run("creates authorization within spending limit", func() {
+		service := s.newService()
 		limit := types.NewMoney(decimal.NewFromInt(1000), types.CurrencyEUR)
-		_, err := service.CreateCardAccount(ctx, application.CreateCardAccountRequest{
-			TenantID:      tenantID,
-			SpendingLimit: limit,
-		})
-		if err != nil {
-			t.Fatalf("failed to create card account: %v", err)
-		}
+		s.createCardAccount(service, limit)
 
-		// Create authorization
 		amount := types.NewMoney(decimal.NewFromInt(100), types.CurrencyEUR)
-		resp, err := service.CreateAuthorization(ctx, application.CreateAuthorizationRequest{
-			TenantID:       tenantID,
+		resp, err := service.CreateAuthorization(s.ctx, application.CreateAuthorizationRequest{
+			TenantID:       s.tenantID,
 			IdempotencyKey: "idem-1",
 			Amount:         amount,
 			MerchantRef:    "merchant-1",
 			Reference:      "ref-1",
-			CorrelationID:  correlationID,
+			CorrelationID:  s.correlationID,
 		})
 
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-		if resp.AuthorizationID == "" {
-			t.Error("expected authorization ID to be set")
-		}
-		if resp.Status != "authorized" {
-			t.Errorf("expected status 'authorized', got %s", resp.Status)
-		}
+		s.Require().NoError(err)
+		s.NotEmpty(resp.AuthorizationID)
+		s.Equal("authorized", resp.Status)
 	})
 
-	t.Run("authorization exceeds spending limit", func(t *testing.T) {
-		dataStore := memory.NewDataStore()
-		service := application.NewSpendingService(dataStore)
-
-		// Create card account with small limit
+	s.Run("rejects authorization exceeding spending limit", func() {
+		service := s.newService()
 		limit := types.NewMoney(decimal.NewFromInt(100), types.CurrencyEUR)
-		_, err := service.CreateCardAccount(ctx, application.CreateCardAccountRequest{
-			TenantID:      tenantID,
-			SpendingLimit: limit,
-		})
-		if err != nil {
-			t.Fatalf("failed to create card account: %v", err)
-		}
+		s.createCardAccount(service, limit)
 
-		// Try to authorize more than limit
 		amount := types.NewMoney(decimal.NewFromInt(500), types.CurrencyEUR)
-		_, err = service.CreateAuthorization(ctx, application.CreateAuthorizationRequest{
-			TenantID:       tenantID,
+		_, err := service.CreateAuthorization(s.ctx, application.CreateAuthorizationRequest{
+			TenantID:       s.tenantID,
 			IdempotencyKey: "idem-1",
 			Amount:         amount,
 			MerchantRef:    "merchant-1",
 			Reference:      "ref-1",
-			CorrelationID:  correlationID,
+			CorrelationID:  s.correlationID,
 		})
 
-		if err != domain.ErrSpendingLimitExceeded {
-			t.Errorf("expected ErrSpendingLimitExceeded, got %v", err)
-		}
-	})
-
-	t.Run("idempotency returns same response", func(t *testing.T) {
-		dataStore := memory.NewDataStore()
-		service := application.NewSpendingService(dataStore)
-
-		// Create card account
-		limit := types.NewMoney(decimal.NewFromInt(1000), types.CurrencyEUR)
-		_, err := service.CreateCardAccount(ctx, application.CreateCardAccountRequest{
-			TenantID:      tenantID,
-			SpendingLimit: limit,
-		})
-		if err != nil {
-			t.Fatalf("failed to create card account: %v", err)
-		}
-
-		// Create authorization
-		amount := types.NewMoney(decimal.NewFromInt(100), types.CurrencyEUR)
-		req := application.CreateAuthorizationRequest{
-			TenantID:       tenantID,
-			IdempotencyKey: "idem-same",
-			Amount:         amount,
-			MerchantRef:    "merchant-1",
-			Reference:      "ref-1",
-			CorrelationID:  correlationID,
-		}
-
-		resp1, err := service.CreateAuthorization(ctx, req)
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-
-		// Call again with same idempotency key
-		resp2, err := service.CreateAuthorization(ctx, req)
-		if err != nil {
-			t.Fatalf("expected no error on idempotent retry, got %v", err)
-		}
-
-		if resp1.AuthorizationID != resp2.AuthorizationID {
-			t.Errorf("expected same authorization ID, got %s and %s", resp1.AuthorizationID, resp2.AuthorizationID)
-		}
+		s.ErrorIs(err, domain.ErrSpendingLimitExceeded)
 	})
 }
 
-func TestSpendingService_CaptureAuthorization(t *testing.T) {
-	ctx := context.Background()
-	tenantID := types.TenantID("tenant-1")
-	correlationID := types.NewCorrelationID()
-
-	t.Run("successful capture", func(t *testing.T) {
-		dataStore := memory.NewDataStore()
-		service := application.NewSpendingService(dataStore)
-
-		// Setup: create card account and authorization
+// TestCaptureWorkflow validates the capture lifecycle after authorization.
+func (s *SpendingServiceSuite) TestCaptureWorkflow() {
+	s.Run("captures authorized amount", func() {
+		service := s.newService()
 		limit := types.NewMoney(decimal.NewFromInt(1000), types.CurrencyEUR)
-		_, err := service.CreateCardAccount(ctx, application.CreateCardAccountRequest{
-			TenantID:      tenantID,
-			SpendingLimit: limit,
-		})
-		if err != nil {
-			t.Fatalf("failed to create card account: %v", err)
-		}
+		s.createCardAccount(service, limit)
 
 		amount := types.NewMoney(decimal.NewFromInt(100), types.CurrencyEUR)
-		authResp, err := service.CreateAuthorization(ctx, application.CreateAuthorizationRequest{
-			TenantID:       tenantID,
+		authResp, err := service.CreateAuthorization(s.ctx, application.CreateAuthorizationRequest{
+			TenantID:       s.tenantID,
 			IdempotencyKey: "idem-auth",
 			Amount:         amount,
 			MerchantRef:    "merchant-1",
 			Reference:      "ref-1",
-			CorrelationID:  correlationID,
+			CorrelationID:  s.correlationID,
 		})
-		if err != nil {
-			t.Fatalf("failed to create authorization: %v", err)
-		}
+		s.Require().NoError(err)
 
-		// Parse authorization ID
 		authID, err := domain.ParseAuthorizationID(authResp.AuthorizationID)
-		if err != nil {
-			t.Fatalf("failed to parse authorization ID: %v", err)
-		}
+		s.Require().NoError(err)
 
-		// Capture
-		captureResp, err := service.CaptureAuthorization(ctx, application.CaptureAuthorizationRequest{
-			TenantID:        tenantID,
+		captureResp, err := service.CaptureAuthorization(s.ctx, application.CaptureAuthorizationRequest{
+			TenantID:        s.tenantID,
 			AuthorizationID: authID,
 			IdempotencyKey:  "idem-capture",
 			Amount:          amount,
-			CorrelationID:   correlationID,
+			CorrelationID:   s.correlationID,
 		})
 
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-		if captureResp.Status != "captured" {
-			t.Errorf("expected status 'captured', got %s", captureResp.Status)
-		}
+		s.Require().NoError(err)
+		s.Equal("captured", captureResp.Status)
 	})
 
-	t.Run("cannot capture more than authorized", func(t *testing.T) {
-		dataStore := memory.NewDataStore()
-		service := application.NewSpendingService(dataStore)
-
-		// Setup
+	s.Run("rejects capture exceeding authorized amount", func() {
+		service := s.newService()
 		limit := types.NewMoney(decimal.NewFromInt(1000), types.CurrencyEUR)
-		_, _ = service.CreateCardAccount(ctx, application.CreateCardAccountRequest{
-			TenantID:      tenantID,
-			SpendingLimit: limit,
-		})
+		s.createCardAccount(service, limit)
 
 		authAmount := types.NewMoney(decimal.NewFromInt(100), types.CurrencyEUR)
-		authResp, _ := service.CreateAuthorization(ctx, application.CreateAuthorizationRequest{
-			TenantID:       tenantID,
+		authResp, _ := service.CreateAuthorization(s.ctx, application.CreateAuthorizationRequest{
+			TenantID:       s.tenantID,
 			IdempotencyKey: "idem-auth",
 			Amount:         authAmount,
 			MerchantRef:    "merchant-1",
 			Reference:      "ref-1",
-			CorrelationID:  correlationID,
+			CorrelationID:  s.correlationID,
 		})
 
 		authID, _ := domain.ParseAuthorizationID(authResp.AuthorizationID)
 
-		// Try to capture more than authorized
 		captureAmount := types.NewMoney(decimal.NewFromInt(150), types.CurrencyEUR)
-		_, err := service.CaptureAuthorization(ctx, application.CaptureAuthorizationRequest{
-			TenantID:        tenantID,
+		_, err := service.CaptureAuthorization(s.ctx, application.CaptureAuthorizationRequest{
+			TenantID:        s.tenantID,
 			AuthorizationID: authID,
 			IdempotencyKey:  "idem-capture",
 			Amount:          captureAmount,
-			CorrelationID:   correlationID,
+			CorrelationID:   s.correlationID,
 		})
 
-		if err != domain.ErrExceedsAuthorizedAmount {
-			t.Errorf("expected ErrExceedsAuthorizedAmount, got %v", err)
-		}
+		s.ErrorIs(err, domain.ErrExceedsAuthorizedAmount)
 	})
 
-	t.Run("cannot capture twice", func(t *testing.T) {
-		dataStore := memory.NewDataStore()
-		service := application.NewSpendingService(dataStore)
-
-		// Setup
+	s.Run("rejects double capture", func() {
+		service := s.newService()
 		limit := types.NewMoney(decimal.NewFromInt(1000), types.CurrencyEUR)
-		_, _ = service.CreateCardAccount(ctx, application.CreateCardAccountRequest{
-			TenantID:      tenantID,
-			SpendingLimit: limit,
-		})
+		s.createCardAccount(service, limit)
 
 		amount := types.NewMoney(decimal.NewFromInt(100), types.CurrencyEUR)
-		authResp, _ := service.CreateAuthorization(ctx, application.CreateAuthorizationRequest{
-			TenantID:       tenantID,
+		authResp, _ := service.CreateAuthorization(s.ctx, application.CreateAuthorizationRequest{
+			TenantID:       s.tenantID,
 			IdempotencyKey: "idem-auth",
 			Amount:         amount,
 			MerchantRef:    "merchant-1",
 			Reference:      "ref-1",
-			CorrelationID:  correlationID,
+			CorrelationID:  s.correlationID,
 		})
 
 		authID, _ := domain.ParseAuthorizationID(authResp.AuthorizationID)
 
 		// First capture
-		_, _ = service.CaptureAuthorization(ctx, application.CaptureAuthorizationRequest{
-			TenantID:        tenantID,
+		_, _ = service.CaptureAuthorization(s.ctx, application.CaptureAuthorizationRequest{
+			TenantID:        s.tenantID,
 			AuthorizationID: authID,
 			IdempotencyKey:  "idem-capture-1",
 			Amount:          amount,
-			CorrelationID:   correlationID,
+			CorrelationID:   s.correlationID,
 		})
 
 		// Second capture with different idempotency key
-		_, err := service.CaptureAuthorization(ctx, application.CaptureAuthorizationRequest{
-			TenantID:        tenantID,
+		_, err := service.CaptureAuthorization(s.ctx, application.CaptureAuthorizationRequest{
+			TenantID:        s.tenantID,
 			AuthorizationID: authID,
 			IdempotencyKey:  "idem-capture-2",
 			Amount:          amount,
-			CorrelationID:   correlationID,
+			CorrelationID:   s.correlationID,
 		})
 
-		if err != domain.ErrAlreadyCaptured {
-			t.Errorf("expected ErrAlreadyCaptured, got %v", err)
+		s.ErrorIs(err, domain.ErrAlreadyCaptured)
+	})
+}
+
+// TestIdempotency validates that repeated requests with same idempotency key return same result.
+func (s *SpendingServiceSuite) TestIdempotency() {
+	s.Run("returns same authorization for duplicate request", func() {
+		service := s.newService()
+		limit := types.NewMoney(decimal.NewFromInt(1000), types.CurrencyEUR)
+		s.createCardAccount(service, limit)
+
+		amount := types.NewMoney(decimal.NewFromInt(100), types.CurrencyEUR)
+		req := application.CreateAuthorizationRequest{
+			TenantID:       s.tenantID,
+			IdempotencyKey: "idem-same",
+			Amount:         amount,
+			MerchantRef:    "merchant-1",
+			Reference:      "ref-1",
+			CorrelationID:  s.correlationID,
 		}
+
+		resp1, err := service.CreateAuthorization(s.ctx, req)
+		s.Require().NoError(err)
+
+		resp2, err := service.CreateAuthorization(s.ctx, req)
+		s.Require().NoError(err)
+
+		s.Equal(resp1.AuthorizationID, resp2.AuthorizationID)
 	})
 }

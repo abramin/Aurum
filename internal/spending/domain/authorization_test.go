@@ -4,123 +4,117 @@ import (
 	"testing"
 
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/suite"
 
 	"aurum/internal/common/types"
 	"aurum/internal/spending/domain"
 )
 
-func TestAuthorization_Capture(t *testing.T) {
-	tenantID := types.TenantID("tenant-1")
-	cardAccountID := domain.NewCardAccountID()
-	amount := types.NewMoney(decimal.NewFromInt(100), types.CurrencyEUR)
+// AuthorizationSuite tests Authorization aggregate behavior.
+//
+// Justification for unit tests: These tests provide fast feedback on state machine
+// invariants. The same behaviors are covered at integration level via feature files,
+// but unit tests catch regressions before slower integration tests run.
+type AuthorizationSuite struct {
+	suite.Suite
+	tenantID      types.TenantID
+	cardAccountID domain.CardAccountID
+	amount        types.Money
+}
 
-	t.Run("successful capture", func(t *testing.T) {
-		auth := domain.NewAuthorization(tenantID, cardAccountID, amount, "merchant-1", "ref-1")
+func TestAuthorizationSuite(t *testing.T) {
+	suite.Run(t, new(AuthorizationSuite))
+}
 
+func (s *AuthorizationSuite) SetupTest() {
+	s.tenantID = types.TenantID("tenant-1")
+	s.cardAccountID = domain.NewCardAccountID()
+	s.amount = types.NewMoney(decimal.NewFromInt(100), types.CurrencyEUR)
+}
+
+func (s *AuthorizationSuite) newAuthorization() *domain.Authorization {
+	return domain.NewAuthorization(s.tenantID, s.cardAccountID, s.amount, "merchant-1", "ref-1")
+}
+
+// TestSettlement validates the capture lifecycle - transitioning from authorized to captured state.
+func (s *AuthorizationSuite) TestSettlement() {
+	s.Run("settles for partial amount", func() {
+		auth := s.newAuthorization()
 		captureAmount := types.NewMoney(decimal.NewFromInt(50), types.CurrencyEUR)
+
 		err := auth.Capture(captureAmount)
 
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-		if auth.State() != domain.AuthorizationStateCaptured {
-			t.Errorf("expected state %s, got %s", domain.AuthorizationStateCaptured, auth.State())
-		}
-		if !auth.CapturedAmount().Equal(captureAmount) {
-			t.Errorf("expected captured amount %s, got %s", captureAmount.String(), auth.CapturedAmount().String())
-		}
+		s.Require().NoError(err)
+		s.Equal(domain.AuthorizationStateCaptured, auth.State())
+		s.True(auth.CapturedAmount().Equal(captureAmount))
 	})
 
-	t.Run("capture full amount", func(t *testing.T) {
-		auth := domain.NewAuthorization(tenantID, cardAccountID, amount, "merchant-1", "ref-1")
+	s.Run("settles for full authorized amount", func() {
+		auth := s.newAuthorization()
 
-		err := auth.Capture(amount)
+		err := auth.Capture(s.amount)
 
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-		if !auth.CapturedAmount().Equal(amount) {
-			t.Errorf("expected captured amount %s, got %s", amount.String(), auth.CapturedAmount().String())
-		}
+		s.Require().NoError(err)
+		s.True(auth.CapturedAmount().Equal(s.amount))
 	})
 
-	t.Run("cannot capture more than authorized", func(t *testing.T) {
-		auth := domain.NewAuthorization(tenantID, cardAccountID, amount, "merchant-1", "ref-1")
-
+	s.Run("rejects amount exceeding authorization", func() {
+		auth := s.newAuthorization()
 		captureAmount := types.NewMoney(decimal.NewFromInt(150), types.CurrencyEUR)
+
 		err := auth.Capture(captureAmount)
 
-		if err != domain.ErrExceedsAuthorizedAmount {
-			t.Errorf("expected ErrExceedsAuthorizedAmount, got %v", err)
-		}
-		if auth.State() != domain.AuthorizationStateAuthorized {
-			t.Errorf("expected state %s, got %s", domain.AuthorizationStateAuthorized, auth.State())
-		}
+		s.ErrorIs(err, domain.ErrExceedsAuthorizedAmount)
+		s.Equal(domain.AuthorizationStateAuthorized, auth.State(), "state should remain authorized on rejection")
 	})
 
-	t.Run("cannot capture twice", func(t *testing.T) {
-		auth := domain.NewAuthorization(tenantID, cardAccountID, amount, "merchant-1", "ref-1")
-
+	s.Run("prevents double settlement", func() {
+		auth := s.newAuthorization()
 		captureAmount := types.NewMoney(decimal.NewFromInt(50), types.CurrencyEUR)
 		_ = auth.Capture(captureAmount)
 
 		err := auth.Capture(captureAmount)
 
-		if err != domain.ErrAlreadyCaptured {
-			t.Errorf("expected ErrAlreadyCaptured, got %v", err)
-		}
+		s.ErrorIs(err, domain.ErrAlreadyCaptured)
 	})
 
-	t.Run("cannot capture with different currency", func(t *testing.T) {
-		auth := domain.NewAuthorization(tenantID, cardAccountID, amount, "merchant-1", "ref-1")
-
+	s.Run("rejects currency mismatch", func() {
+		auth := s.newAuthorization()
 		captureAmount := types.NewMoney(decimal.NewFromInt(50), types.CurrencyUSD)
+
 		err := auth.Capture(captureAmount)
 
-		if err != domain.ErrCurrencyMismatch {
-			t.Errorf("expected ErrCurrencyMismatch, got %v", err)
-		}
+		s.ErrorIs(err, domain.ErrCurrencyMismatch)
 	})
 
-	t.Run("cannot capture reversed authorization", func(t *testing.T) {
-		auth := domain.NewAuthorization(tenantID, cardAccountID, amount, "merchant-1", "ref-1")
+	s.Run("rejects settlement of reversed authorization", func() {
+		auth := s.newAuthorization()
 		_ = auth.Reverse()
-
 		captureAmount := types.NewMoney(decimal.NewFromInt(50), types.CurrencyEUR)
+
 		err := auth.Capture(captureAmount)
 
-		if err != domain.ErrInvalidStateTransition {
-			t.Errorf("expected ErrInvalidStateTransition, got %v", err)
-		}
+		s.ErrorIs(err, domain.ErrInvalidStateTransition)
 	})
 }
 
-func TestAuthorization_Reverse(t *testing.T) {
-	tenantID := types.TenantID("tenant-1")
-	cardAccountID := domain.NewCardAccountID()
-	amount := types.NewMoney(decimal.NewFromInt(100), types.CurrencyEUR)
-
-	t.Run("successful reverse", func(t *testing.T) {
-		auth := domain.NewAuthorization(tenantID, cardAccountID, amount, "merchant-1", "ref-1")
+// TestReversal validates the reversal lifecycle - releasing holds on authorized amounts.
+func (s *AuthorizationSuite) TestReversal() {
+	s.Run("reverses authorized amount", func() {
+		auth := s.newAuthorization()
 
 		err := auth.Reverse()
 
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-		if auth.State() != domain.AuthorizationStateReversed {
-			t.Errorf("expected state %s, got %s", domain.AuthorizationStateReversed, auth.State())
-		}
+		s.Require().NoError(err)
+		s.Equal(domain.AuthorizationStateReversed, auth.State())
 	})
 
-	t.Run("cannot reverse captured authorization", func(t *testing.T) {
-		auth := domain.NewAuthorization(tenantID, cardAccountID, amount, "merchant-1", "ref-1")
-		_ = auth.Capture(amount)
+	s.Run("rejects reversal of captured authorization", func() {
+		auth := s.newAuthorization()
+		_ = auth.Capture(s.amount)
 
 		err := auth.Reverse()
 
-		if err != domain.ErrInvalidStateTransition {
-			t.Errorf("expected ErrInvalidStateTransition, got %v", err)
-		}
+		s.ErrorIs(err, domain.ErrInvalidStateTransition)
 	})
 }

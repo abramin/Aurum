@@ -1,5 +1,4 @@
 -- Spending context tables
--- Following the Qonto pattern: atomic operations require all related data
 -- (entities + events) to be written in a single transaction
 
 -- Card accounts with spending limits
@@ -59,7 +58,6 @@ CREATE TABLE spending.idempotency_keys (
     PRIMARY KEY (tenant_id, idempotency_key)
 );
 
--- Outbox for reliable event publishing (Qonto pattern)
 -- Events are written atomically with domain changes, then published asynchronously
 CREATE TABLE spending.outbox (
     event_id VARCHAR(255) PRIMARY KEY,
