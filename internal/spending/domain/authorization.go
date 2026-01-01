@@ -47,6 +47,7 @@ type Authorization struct {
 }
 
 // NewAuthorization creates a new authorization in the Authorized state.
+// The now parameter makes the function pure and testable.
 // Returns error if tenant ID is empty.
 func NewAuthorization(
 	tenantID types.TenantID,
@@ -54,11 +55,11 @@ func NewAuthorization(
 	authorizedAmount types.Money,
 	merchantRef string,
 	reference string,
+	now time.Time,
 ) (*Authorization, error) {
 	if tenantID.IsEmpty() {
 		return nil, ErrEmptyTenantID
 	}
-	now := time.Now()
 	return &Authorization{
 		id:               NewAuthorizationID(),
 		tenantID:         tenantID,
@@ -111,11 +112,12 @@ func ReconstructAuthorization(
 }
 
 // Capture captures the authorization with the given amount.
+// The now parameter makes the function pure and testable.
 // Returns error if:
 //   - Already captured
 //   - Not in Authorized state
 //   - Amount exceeds authorized amount
-func (a *Authorization) Capture(amount types.Money) error {
+func (a *Authorization) Capture(amount types.Money, now time.Time) error {
 	if a.state == AuthorizationStateCaptured {
 		return ErrAlreadyCaptured
 	}
@@ -132,31 +134,33 @@ func (a *Authorization) Capture(amount types.Money) error {
 	a.capturedAmount = amount
 	a.state = AuthorizationStateCaptured
 	a.version++
-	a.updatedAt = time.Now()
+	a.updatedAt = now
 	return nil
 }
 
 // Reverse reverses the authorization.
-func (a *Authorization) Reverse() error {
+// The now parameter makes the function pure and testable.
+func (a *Authorization) Reverse(now time.Time) error {
 	if a.state != AuthorizationStateAuthorized {
 		return ErrInvalidStateTransition
 	}
 
 	a.state = AuthorizationStateReversed
 	a.version++
-	a.updatedAt = time.Now()
+	a.updatedAt = now
 	return nil
 }
 
 // Expire expires the authorization.
-func (a *Authorization) Expire() error {
+// The now parameter makes the function pure and testable.
+func (a *Authorization) Expire(now time.Time) error {
 	if a.state != AuthorizationStateAuthorized {
 		return ErrInvalidStateTransition
 	}
 
 	a.state = AuthorizationStateExpired
 	a.version++
-	a.updatedAt = time.Now()
+	a.updatedAt = now
 	return nil
 }
 

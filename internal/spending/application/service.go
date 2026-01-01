@@ -53,6 +53,36 @@ func handleIdempotencyConflict[T any](err error) (*T, error) {
 	return &resp, nil
 }
 
+// storeIdempotency atomically stores an idempotency entry, preventing TOCTOU races.
+// Returns idempotencyConflictError if a concurrent request completed first.
+func storeIdempotency[T any](
+	ctx context.Context,
+	store domain.IdempotencyStore,
+	tenantID types.TenantID,
+	idempotencyKey string,
+	resourceID string,
+	statusCode int,
+	response *T,
+	now time.Time,
+) error {
+	responseBody, _ := json.Marshal(response)
+	created, existingEntry, err := store.SetIfAbsent(ctx, &domain.IdempotencyEntry{
+		TenantID:       tenantID,
+		IdempotencyKey: idempotencyKey,
+		ResourceID:     resourceID,
+		StatusCode:     statusCode,
+		ResponseBody:   responseBody,
+		CreatedAt:      now,
+	})
+	if err != nil {
+		return err
+	}
+	if !created {
+		return &idempotencyConflictError{existingEntry: existingEntry}
+	}
+	return nil
+}
+
 // SpendingService implements the application layer for the Spending context.
 //
 // Key design decisions:
@@ -111,6 +141,8 @@ func (s *SpendingService) CreateAuthorization(ctx context.Context, req CreateAut
 			return nil
 		}
 
+		now := time.Now()
+
 		// Get card account for tenant
 		cardAccount, err := repos.CardAccounts().FindByTenantID(ctx, req.TenantID)
 		if err != nil {
@@ -118,7 +150,7 @@ func (s *SpendingService) CreateAuthorization(ctx context.Context, req CreateAut
 		}
 
 		// Validate spending limit
-		if err := cardAccount.AuthorizeAmount(req.Amount); err != nil {
+		if err := cardAccount.AuthorizeAmount(req.Amount, now); err != nil {
 			return err
 		}
 
@@ -129,6 +161,7 @@ func (s *SpendingService) CreateAuthorization(ctx context.Context, req CreateAut
 			req.Amount,
 			req.MerchantRef,
 			req.Reference,
+			now,
 		)
 		if err != nil {
 			return err
@@ -160,20 +193,9 @@ func (s *SpendingService) CreateAuthorization(ctx context.Context, req CreateAut
 		}
 
 		// Atomically store idempotency entry - prevents TOCTOU race
-		responseBody, _ := json.Marshal(result)
-		created, existingEntry, err := repos.IdempotencyStore().SetIfAbsent(ctx, &domain.IdempotencyEntry{
-			TenantID:       req.TenantID,
-			IdempotencyKey: req.IdempotencyKey,
-			ResourceID:     auth.ID().String(),
-			StatusCode:     http.StatusCreated,
-			ResponseBody:   responseBody,
-			CreatedAt:      time.Now(),
-		})
-		if err != nil {
+		if err := storeIdempotency(ctx, repos.IdempotencyStore(), req.TenantID, req.IdempotencyKey,
+			auth.ID().String(), http.StatusCreated, result, now); err != nil {
 			return err
-		}
-		if !created {
-			return &idempotencyConflictError{existingEntry: existingEntry}
 		}
 
 		logging.InfoContext(ctx, "Authorization created",
@@ -229,6 +251,8 @@ func (s *SpendingService) CaptureAuthorization(ctx context.Context, req CaptureA
 			return nil
 		}
 
+		now := time.Now()
+
 		// Get authorization
 		auth, err := repos.Authorizations().FindByID(ctx, req.TenantID, req.AuthorizationID)
 		if err != nil {
@@ -236,7 +260,7 @@ func (s *SpendingService) CaptureAuthorization(ctx context.Context, req CaptureA
 		}
 
 		// Capture authorization
-		if err := auth.Capture(req.Amount); err != nil {
+		if err := auth.Capture(req.Amount, now); err != nil {
 			return err
 		}
 
@@ -262,20 +286,9 @@ func (s *SpendingService) CaptureAuthorization(ctx context.Context, req CaptureA
 		}
 
 		// Atomically store idempotency entry - prevents TOCTOU race
-		responseBody, _ := json.Marshal(result)
-		created, existingEntry, err := repos.IdempotencyStore().SetIfAbsent(ctx, &domain.IdempotencyEntry{
-			TenantID:       req.TenantID,
-			IdempotencyKey: req.IdempotencyKey,
-			ResourceID:     auth.ID().String(),
-			StatusCode:     http.StatusOK,
-			ResponseBody:   responseBody,
-			CreatedAt:      time.Now(),
-		})
-		if err != nil {
+		if err := storeIdempotency(ctx, repos.IdempotencyStore(), req.TenantID, req.IdempotencyKey,
+			auth.ID().String(), http.StatusOK, result, now); err != nil {
 			return err
-		}
-		if !created {
-			return &idempotencyConflictError{existingEntry: existingEntry}
 		}
 
 		logging.InfoContext(ctx, "Authorization captured",
@@ -353,7 +366,9 @@ func (s *SpendingService) CreateCardAccount(ctx context.Context, req CreateCardA
 	var result *CreateCardAccountResponse
 
 	err := s.dataStore.Atomic(ctx, func(repos domain.Repositories) error {
-		account, err := domain.NewCardAccount(req.TenantID, req.SpendingLimit)
+		now := time.Now()
+
+		account, err := domain.NewCardAccount(req.TenantID, req.SpendingLimit, now)
 		if err != nil {
 			return err
 		}
@@ -412,6 +427,8 @@ func (s *SpendingService) ReverseAuthorization(ctx context.Context, req ReverseA
 			return nil
 		}
 
+		now := time.Now()
+
 		// Get authorization
 		auth, err := repos.Authorizations().FindByID(ctx, req.TenantID, req.AuthorizationID)
 		if err != nil {
@@ -425,12 +442,12 @@ func (s *SpendingService) ReverseAuthorization(ctx context.Context, req ReverseA
 		}
 
 		// Reverse authorization
-		if err := auth.Reverse(); err != nil {
+		if err := auth.Reverse(now); err != nil {
 			return err
 		}
 
 		// Release the authorized amount from the card account
-		if err := cardAccount.ReleaseAmount(auth.AuthorizedAmount()); err != nil {
+		if err := cardAccount.ReleaseAmount(auth.AuthorizedAmount(), now); err != nil {
 			return err
 		}
 
@@ -460,20 +477,9 @@ func (s *SpendingService) ReverseAuthorization(ctx context.Context, req ReverseA
 		}
 
 		// Atomically store idempotency entry - prevents TOCTOU race
-		responseBody, _ := json.Marshal(result)
-		created, existingEntry, err := repos.IdempotencyStore().SetIfAbsent(ctx, &domain.IdempotencyEntry{
-			TenantID:       req.TenantID,
-			IdempotencyKey: req.IdempotencyKey,
-			ResourceID:     auth.ID().String(),
-			StatusCode:     http.StatusOK,
-			ResponseBody:   responseBody,
-			CreatedAt:      time.Now(),
-		})
-		if err != nil {
+		if err := storeIdempotency(ctx, repos.IdempotencyStore(), req.TenantID, req.IdempotencyKey,
+			auth.ID().String(), http.StatusOK, result, now); err != nil {
 			return err
-		}
-		if !created {
-			return &idempotencyConflictError{existingEntry: existingEntry}
 		}
 
 		logging.InfoContext(ctx, "Authorization reversed",

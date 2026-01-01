@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/suite"
@@ -33,18 +34,20 @@ func (s *AuthorizationSuite) SetupTest() {
 }
 
 func (s *AuthorizationSuite) newAuthorization() *domain.Authorization {
-	auth, err := domain.NewAuthorization(s.tenantID, s.cardAccountID, s.amount, "merchant-1", "ref-1")
+	auth, err := domain.NewAuthorization(s.tenantID, s.cardAccountID, s.amount, "merchant-1", "ref-1", time.Now())
 	s.Require().NoError(err)
 	return auth
 }
 
 // TestSettlement validates the capture lifecycle - transitioning from authorized to captured state.
 func (s *AuthorizationSuite) TestSettlement() {
+	now := time.Now()
+
 	s.Run("settles for partial amount", func() {
 		auth := s.newAuthorization()
 		captureAmount := types.NewMoney(decimal.NewFromInt(50), types.CurrencyEUR)
 
-		err := auth.Capture(captureAmount)
+		err := auth.Capture(captureAmount, now)
 
 		s.Require().NoError(err)
 		s.Equal(domain.AuthorizationStateCaptured, auth.State())
@@ -54,7 +57,7 @@ func (s *AuthorizationSuite) TestSettlement() {
 	s.Run("settles for full authorized amount", func() {
 		auth := s.newAuthorization()
 
-		err := auth.Capture(s.amount)
+		err := auth.Capture(s.amount, now)
 
 		s.Require().NoError(err)
 		s.True(auth.CapturedAmount().Equal(s.amount))
@@ -64,7 +67,7 @@ func (s *AuthorizationSuite) TestSettlement() {
 		auth := s.newAuthorization()
 		captureAmount := types.NewMoney(decimal.NewFromInt(150), types.CurrencyEUR)
 
-		err := auth.Capture(captureAmount)
+		err := auth.Capture(captureAmount, now)
 
 		s.ErrorIs(err, domain.ErrExceedsAuthorizedAmount)
 		s.Equal(domain.AuthorizationStateAuthorized, auth.State(), "state should remain authorized on rejection")
@@ -73,9 +76,9 @@ func (s *AuthorizationSuite) TestSettlement() {
 	s.Run("prevents double settlement", func() {
 		auth := s.newAuthorization()
 		captureAmount := types.NewMoney(decimal.NewFromInt(50), types.CurrencyEUR)
-		_ = auth.Capture(captureAmount)
+		_ = auth.Capture(captureAmount, now)
 
-		err := auth.Capture(captureAmount)
+		err := auth.Capture(captureAmount, now)
 
 		s.ErrorIs(err, domain.ErrAlreadyCaptured)
 	})
@@ -84,17 +87,17 @@ func (s *AuthorizationSuite) TestSettlement() {
 		auth := s.newAuthorization()
 		captureAmount := types.NewMoney(decimal.NewFromInt(50), types.CurrencyUSD)
 
-		err := auth.Capture(captureAmount)
+		err := auth.Capture(captureAmount, now)
 
 		s.ErrorIs(err, domain.ErrCurrencyMismatch)
 	})
 
 	s.Run("rejects settlement of reversed authorization", func() {
 		auth := s.newAuthorization()
-		_ = auth.Reverse()
+		_ = auth.Reverse(now)
 		captureAmount := types.NewMoney(decimal.NewFromInt(50), types.CurrencyEUR)
 
-		err := auth.Capture(captureAmount)
+		err := auth.Capture(captureAmount, now)
 
 		s.ErrorIs(err, domain.ErrInvalidStateTransition)
 	})
@@ -102,10 +105,12 @@ func (s *AuthorizationSuite) TestSettlement() {
 
 // TestReversal validates the reversal lifecycle - releasing holds on authorized amounts.
 func (s *AuthorizationSuite) TestReversal() {
+	now := time.Now()
+
 	s.Run("reverses authorized amount", func() {
 		auth := s.newAuthorization()
 
-		err := auth.Reverse()
+		err := auth.Reverse(now)
 
 		s.Require().NoError(err)
 		s.Equal(domain.AuthorizationStateReversed, auth.State())
@@ -113,9 +118,9 @@ func (s *AuthorizationSuite) TestReversal() {
 
 	s.Run("rejects reversal of captured authorization", func() {
 		auth := s.newAuthorization()
-		_ = auth.Capture(s.amount)
+		_ = auth.Capture(s.amount, now)
 
-		err := auth.Reverse()
+		err := auth.Reverse(now)
 
 		s.ErrorIs(err, domain.ErrInvalidStateTransition)
 	})

@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/suite"
@@ -31,18 +32,20 @@ func (s *CardAccountSuite) SetupTest() {
 }
 
 func (s *CardAccountSuite) newCardAccount() *domain.CardAccount {
-	account, err := domain.NewCardAccount(s.tenantID, s.limit)
+	account, err := domain.NewCardAccount(s.tenantID, s.limit, time.Now())
 	s.Require().NoError(err)
 	return account
 }
 
 // TestSpendLimitEnforcement validates that authorizations respect the spending limit.
 func (s *CardAccountSuite) TestSpendLimitEnforcement() {
+	now := time.Now()
+
 	s.Run("authorizes single amount within limit", func() {
 		account := s.newCardAccount()
 		amount := types.NewMoney(decimal.NewFromInt(100), types.CurrencyEUR)
 
-		err := account.AuthorizeAmount(amount)
+		err := account.AuthorizeAmount(amount, now)
 
 		s.Require().NoError(err)
 		s.True(account.RollingSpend().Equal(amount))
@@ -52,9 +55,9 @@ func (s *CardAccountSuite) TestSpendLimitEnforcement() {
 		account := s.newCardAccount()
 		amount := types.NewMoney(decimal.NewFromInt(300), types.CurrencyEUR)
 
-		_ = account.AuthorizeAmount(amount)
-		_ = account.AuthorizeAmount(amount)
-		err := account.AuthorizeAmount(amount)
+		_ = account.AuthorizeAmount(amount, now)
+		_ = account.AuthorizeAmount(amount, now)
+		err := account.AuthorizeAmount(amount, now)
 
 		s.Require().NoError(err)
 		expectedSpend := types.NewMoney(decimal.NewFromInt(900), types.CurrencyEUR)
@@ -65,7 +68,7 @@ func (s *CardAccountSuite) TestSpendLimitEnforcement() {
 		account := s.newCardAccount()
 		amount := types.NewMoney(decimal.NewFromInt(1500), types.CurrencyEUR)
 
-		err := account.AuthorizeAmount(amount)
+		err := account.AuthorizeAmount(amount, now)
 
 		s.ErrorIs(err, domain.ErrSpendingLimitExceeded)
 		s.True(account.RollingSpend().IsZero(), "rolling spend should remain zero on rejection")
@@ -74,9 +77,9 @@ func (s *CardAccountSuite) TestSpendLimitEnforcement() {
 	s.Run("rejects cumulative authorization exceeding limit", func() {
 		account := s.newCardAccount()
 		amount := types.NewMoney(decimal.NewFromInt(600), types.CurrencyEUR)
-		_ = account.AuthorizeAmount(amount)
+		_ = account.AuthorizeAmount(amount, now)
 
-		err := account.AuthorizeAmount(amount) // Total would be 1200 > 1000
+		err := account.AuthorizeAmount(amount, now) // Total would be 1200 > 1000
 
 		s.ErrorIs(err, domain.ErrSpendingLimitExceeded)
 		s.True(account.RollingSpend().Equal(amount), "rolling spend should remain at first authorization")
@@ -86,7 +89,7 @@ func (s *CardAccountSuite) TestSpendLimitEnforcement() {
 		account := s.newCardAccount()
 		amount := types.NewMoney(decimal.NewFromInt(100), types.CurrencyUSD)
 
-		err := account.AuthorizeAmount(amount)
+		err := account.AuthorizeAmount(amount, now)
 
 		s.ErrorIs(err, domain.ErrCurrencyMismatch)
 	})
@@ -95,7 +98,7 @@ func (s *CardAccountSuite) TestSpendLimitEnforcement() {
 		account := s.newCardAccount()
 		amount := types.NewMoney(decimal.NewFromInt(400), types.CurrencyEUR)
 
-		_ = account.AuthorizeAmount(amount)
+		_ = account.AuthorizeAmount(amount, now)
 
 		available := account.AvailableLimit()
 		expected := types.NewMoney(decimal.NewFromInt(600), types.CurrencyEUR)
@@ -105,13 +108,15 @@ func (s *CardAccountSuite) TestSpendLimitEnforcement() {
 
 // TestAmountRelease validates that reversals restore available spending capacity.
 func (s *CardAccountSuite) TestAmountRelease() {
+	now := time.Now()
+
 	s.Run("releases amount back to available limit", func() {
 		account := s.newCardAccount()
 		authAmount := types.NewMoney(decimal.NewFromInt(500), types.CurrencyEUR)
-		_ = account.AuthorizeAmount(authAmount)
+		_ = account.AuthorizeAmount(authAmount, now)
 
 		releaseAmount := types.NewMoney(decimal.NewFromInt(200), types.CurrencyEUR)
-		err := account.ReleaseAmount(releaseAmount)
+		err := account.ReleaseAmount(releaseAmount, now)
 
 		s.Require().NoError(err)
 		expected := types.NewMoney(decimal.NewFromInt(300), types.CurrencyEUR)
@@ -121,10 +126,10 @@ func (s *CardAccountSuite) TestAmountRelease() {
 	s.Run("rejects release with currency mismatch", func() {
 		account := s.newCardAccount()
 		authAmount := types.NewMoney(decimal.NewFromInt(500), types.CurrencyEUR)
-		_ = account.AuthorizeAmount(authAmount)
+		_ = account.AuthorizeAmount(authAmount, now)
 
 		releaseAmount := types.NewMoney(decimal.NewFromInt(200), types.CurrencyUSD)
-		err := account.ReleaseAmount(releaseAmount)
+		err := account.ReleaseAmount(releaseAmount, now)
 
 		s.ErrorIs(err, domain.ErrCurrencyMismatch)
 	})
