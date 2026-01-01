@@ -1,4 +1,4 @@
-.PHONY: up down migrate migrate-down test run build clean help
+.PHONY: up down migrate migrate-down sqlc test run build clean help
 
 # Default target
 help:
@@ -8,6 +8,7 @@ help:
 	@echo "  down         Stop infrastructure"
 	@echo "  migrate      Apply database migrations"
 	@echo "  migrate-down Rollback last migration"
+	@echo "  sqlc         Generate sqlc queries"
 	@echo "  test         Run all tests"
 	@echo "  run          Run the main service"
 	@echo "  build        Build all binaries"
@@ -29,6 +30,9 @@ migrate-down:
 
 migrate-version:
 	go run ./cmd/migrate version
+
+sqlc:
+	sqlc generate -f sqlc.yaml
 
 # Development
 run:

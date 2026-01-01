@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"aurum/internal/common/types"
 	"aurum/internal/spending/domain"
+	"aurum/internal/spending/infrastructure/postgres/sqlc"
 )
 
 // OutboxRepository implements domain.OutboxRepository using PostgreSQL.
@@ -14,88 +16,61 @@ import (
 // Events are written to the outbox within the same transaction as domain changes,
 // then published asynchronously by a separate process (outbox publisher).
 type OutboxRepository struct {
-	db Executor
+	queries *sqlc.Queries
 }
 
 // NewOutboxRepository creates a new OutboxRepository.
-func NewOutboxRepository(db Executor) *OutboxRepository {
-	return &OutboxRepository{db: db}
+func NewOutboxRepository(db sqlc.DBTX) *OutboxRepository {
+	return &OutboxRepository{queries: sqlc.New(db)}
 }
 
 // Append adds an event to the outbox.
 // It persists the event payload and metadata as part of the current transaction.
 func (r *OutboxRepository) Append(ctx context.Context, entry *domain.OutboxEntry) error {
-	_, err := r.db.Exec(ctx, `
-		INSERT INTO spending.outbox (
-			event_id, event_type, tenant_id,
-			correlation_id, causation_id,
-			payload, occurred_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		entry.ID.String(),
-		entry.EventType,
-		entry.TenantID.String(),
-		string(entry.CorrelationID),
-		string(entry.CausationID),
-		entry.Payload,
-		entry.OccurredAt,
-	)
-	return err
+	return r.queries.InsertOutboxEntry(ctx, sqlc.InsertOutboxEntryParams{
+		EventID:       entry.ID.String(),
+		EventType:     entry.EventType,
+		TenantID:      entry.TenantID.String(),
+		CorrelationID: textFromString(string(entry.CorrelationID)),
+		CausationID:   textFromString(string(entry.CausationID)),
+		Payload:       entry.Payload,
+		OccurredAt:    timeToTimestamptz(entry.OccurredAt),
+	})
 }
 
 // FetchUnpublished retrieves unpublished events for publishing.
 // It locks rows with FOR UPDATE SKIP LOCKED to support concurrent publishers,
 // ordering by occurred_at to maintain event ordering.
 func (r *OutboxRepository) FetchUnpublished(ctx context.Context, limit int) ([]*domain.OutboxEntry, error) {
-	rows, err := r.db.Query(ctx, `
-		SELECT event_id, event_type, tenant_id,
-			   correlation_id, causation_id,
-			   payload, occurred_at, published_at
-		FROM spending.outbox
-		WHERE published_at IS NULL
-		ORDER BY occurred_at ASC
-		LIMIT $1
-		FOR UPDATE SKIP LOCKED`,
-		limit,
-	)
+	rows, err := r.queries.ListUnpublishedOutbox(ctx, int32(limit))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var entries []*domain.OutboxEntry
-	for rows.Next() {
-		var (
-			eventID       string
-			eventType     string
-			tenant        string
-			correlationID string
-			causationID   string
-			payload       []byte
-			occurredAt    time.Time
-			publishedAt   *time.Time
-		)
-
-		if err := rows.Scan(
-			&eventID, &eventType, &tenant,
-			&correlationID, &causationID,
-			&payload, &occurredAt, &publishedAt,
-		); err != nil {
-			return nil, err
+	entries := make([]*domain.OutboxEntry, 0, len(rows))
+	for _, row := range rows {
+		occurredAt, err := timestamptzToTime(row.OccurredAt)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid occurred_at: %v", domain.ErrCorruptData, err)
+		}
+		publishedAt, err := timestamptzToTimePtr(row.PublishedAt)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid published_at: %v", domain.ErrCorruptData, err)
 		}
 
 		entries = append(entries, &domain.OutboxEntry{
-			ID:            types.EventID(eventID),
-			EventType:     eventType,
-			TenantID:      types.TenantID(tenant),
-			CorrelationID: types.CorrelationID(correlationID),
-			CausationID:   types.CausationID(causationID),
-			Payload:       payload,
+			ID:            types.EventID(row.EventID),
+			EventType:     row.EventType,
+			TenantID:      types.TenantID(row.TenantID),
+			CorrelationID: types.CorrelationID(row.CorrelationID),
+			CausationID:   types.CausationID(row.CausationID),
+			Payload:       row.Payload,
 			OccurredAt:    occurredAt,
 			PublishedAt:   publishedAt,
 		})
 	}
 
-	return entries, rows.Err()
+	return entries, nil
 }
 
 // MarkPublished marks events as published.
@@ -105,20 +80,15 @@ func (r *OutboxRepository) MarkPublished(ctx context.Context, ids []types.EventI
 		return nil
 	}
 
-	// Convert IDs to strings for the query
 	stringIDs := make([]string, len(ids))
 	for i, id := range ids {
 		stringIDs[i] = id.String()
 	}
 
-	_, err := r.db.Exec(ctx, `
-		UPDATE spending.outbox
-		SET published_at = $1
-		WHERE event_id = ANY($2)`,
-		time.Now(),
-		stringIDs,
-	)
-	return err
+	return r.queries.MarkOutboxPublished(ctx, sqlc.MarkOutboxPublishedParams{
+		PublishedAt: timeToTimestamptz(time.Now()),
+		EventIds:    stringIDs,
+	})
 }
 
 // Verify interface implementation.

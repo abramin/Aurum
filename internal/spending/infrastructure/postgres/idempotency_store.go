@@ -3,56 +3,50 @@ package postgres
 import (
 	"context"
 	"errors"
-	"time"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 
 	"aurum/internal/common/types"
 	"aurum/internal/spending/domain"
+	"aurum/internal/spending/infrastructure/postgres/sqlc"
 )
 
 // IdempotencyStore implements domain.IdempotencyStore using PostgreSQL.
 type IdempotencyStore struct {
-	db Executor
+	queries *sqlc.Queries
 }
 
 // NewIdempotencyStore creates a new IdempotencyStore.
-func NewIdempotencyStore(db Executor) *IdempotencyStore {
-	return &IdempotencyStore{db: db}
+func NewIdempotencyStore(db sqlc.DBTX) *IdempotencyStore {
+	return &IdempotencyStore{queries: sqlc.New(db)}
 }
 
 // Get retrieves an idempotency entry by key.
 // Returns (nil, nil) when no entry exists; absence is not treated as an error.
 func (s *IdempotencyStore) Get(ctx context.Context, tenantID types.TenantID, key string) (*domain.IdempotencyEntry, error) {
-	var (
-		tenant       string
-		idempKey     string
-		resourceID   string
-		statusCode   int
-		responseBody []byte
-		createdAt    time.Time
-	)
-
-	err := s.db.QueryRow(ctx, `
-		SELECT tenant_id, idempotency_key, resource_id, status_code, response_body, created_at
-		FROM spending.idempotency_keys
-		WHERE tenant_id = $1 AND idempotency_key = $2`,
-		tenantID.String(), key,
-	).Scan(&tenant, &idempKey, &resourceID, &statusCode, &responseBody, &createdAt)
-
+	row, err := s.queries.GetIdempotencyEntry(ctx, sqlc.GetIdempotencyEntryParams{
+		TenantID:       tenantID.String(),
+		IdempotencyKey: key,
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil // Not found is not an error for idempotency checks
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 
+	createdAt, err := timestamptzToTime(row.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid created_at: %v", domain.ErrCorruptData, err)
+	}
+
 	return &domain.IdempotencyEntry{
-		TenantID:       types.TenantID(tenant),
-		IdempotencyKey: idempKey,
-		ResourceID:     resourceID,
-		StatusCode:     statusCode,
-		ResponseBody:   responseBody,
+		TenantID:       types.TenantID(row.TenantID),
+		IdempotencyKey: row.IdempotencyKey,
+		ResourceID:     row.ResourceID,
+		StatusCode:     int(row.StatusCode),
+		ResponseBody:   row.ResponseBody,
 		CreatedAt:      createdAt,
 	}, nil
 }
@@ -60,73 +54,43 @@ func (s *IdempotencyStore) Get(ctx context.Context, tenantID types.TenantID, key
 // Set stores an idempotency entry.
 // It upserts on (tenant_id, idempotency_key) and overwrites the stored response payload.
 func (s *IdempotencyStore) Set(ctx context.Context, entry *domain.IdempotencyEntry) error {
-	_, err := s.db.Exec(ctx, `
-		INSERT INTO spending.idempotency_keys (
-			tenant_id, idempotency_key, resource_id, status_code, response_body, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET
-			resource_id = EXCLUDED.resource_id,
-			status_code = EXCLUDED.status_code,
-			response_body = EXCLUDED.response_body`,
-		entry.TenantID.String(),
-		entry.IdempotencyKey,
-		entry.ResourceID,
-		entry.StatusCode,
-		entry.ResponseBody,
-		entry.CreatedAt,
-	)
-	return err
+	return s.queries.UpsertIdempotencyEntry(ctx, sqlc.UpsertIdempotencyEntryParams{
+		TenantID:       entry.TenantID.String(),
+		IdempotencyKey: entry.IdempotencyKey,
+		ResourceID:     entry.ResourceID,
+		StatusCode:     int32(entry.StatusCode),
+		ResponseBody:   entry.ResponseBody,
+		CreatedAt:      timeToTimestamptz(entry.CreatedAt),
+	})
 }
 
 // SetIfAbsent atomically stores an entry if no entry exists.
 // It uses a CTE to attempt insert and return the existing row in a single round-trip.
 // Returns (true, entry, nil) if inserted, or (false, existing, nil) if already present.
 func (s *IdempotencyStore) SetIfAbsent(ctx context.Context, entry *domain.IdempotencyEntry) (bool, *domain.IdempotencyEntry, error) {
-	// Single-query pattern: CTE attempts insert, then UNION ALL selects existing if insert was skipped.
-	// This avoids the double round-trip of INSERT then SELECT on conflict.
-	var (
-		tenant       string
-		idempKey     string
-		resourceID   string
-		statusCode   int
-		responseBody []byte
-		createdAt    time.Time
-		wasInserted  bool
-	)
-
-	err := s.db.QueryRow(ctx, `
-		WITH new_row AS (
-			INSERT INTO spending.idempotency_keys (
-				tenant_id, idempotency_key, resource_id, status_code, response_body, created_at
-			) VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
-			RETURNING tenant_id, idempotency_key, resource_id, status_code, response_body, created_at, true AS inserted
-		)
-		SELECT tenant_id, idempotency_key, resource_id, status_code, response_body, created_at, inserted
-		FROM new_row
-		UNION ALL
-		SELECT tenant_id, idempotency_key, resource_id, status_code, response_body, created_at, false AS inserted
-		FROM spending.idempotency_keys
-		WHERE tenant_id = $1 AND idempotency_key = $2
-		  AND NOT EXISTS (SELECT 1 FROM new_row)`,
-		entry.TenantID.String(),
-		entry.IdempotencyKey,
-		entry.ResourceID,
-		entry.StatusCode,
-		entry.ResponseBody,
-		entry.CreatedAt,
-	).Scan(&tenant, &idempKey, &resourceID, &statusCode, &responseBody, &createdAt, &wasInserted)
-
+	row, err := s.queries.InsertIdempotencyIfAbsent(ctx, sqlc.InsertIdempotencyIfAbsentParams{
+		TenantID:       entry.TenantID.String(),
+		IdempotencyKey: entry.IdempotencyKey,
+		ResourceID:     entry.ResourceID,
+		StatusCode:     int32(entry.StatusCode),
+		ResponseBody:   entry.ResponseBody,
+		CreatedAt:      timeToTimestamptz(entry.CreatedAt),
+	})
 	if err != nil {
 		return false, nil, err
 	}
 
-	return wasInserted, &domain.IdempotencyEntry{
-		TenantID:       types.TenantID(tenant),
-		IdempotencyKey: idempKey,
-		ResourceID:     resourceID,
-		StatusCode:     statusCode,
-		ResponseBody:   responseBody,
+	createdAt, err := timestamptzToTime(row.CreatedAt)
+	if err != nil {
+		return false, nil, fmt.Errorf("%w: invalid created_at: %v", domain.ErrCorruptData, err)
+	}
+
+	return row.Inserted, &domain.IdempotencyEntry{
+		TenantID:       types.TenantID(row.TenantID),
+		IdempotencyKey: row.IdempotencyKey,
+		ResourceID:     row.ResourceID,
+		StatusCode:     int(row.StatusCode),
+		ResponseBody:   row.ResponseBody,
 		CreatedAt:      createdAt,
 	}, nil
 }

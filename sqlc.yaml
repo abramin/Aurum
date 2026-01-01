@@ -1,0 +1,17 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema:
+      - "migrations/000001_init_schemas.up.sql"
+      - "migrations/000002_spending_tables.up.sql"
+      - "migrations/000003_performance_indexes.up.sql"
+    queries: "internal/spending/infrastructure/postgres/queries"
+    gen:
+      go:
+        package: "sqlc"
+        out: "internal/spending/infrastructure/postgres/sqlc"
+        sql_package: "pgx/v5"
+        emit_interface: true
+        overrides:
+          - db_type: "uuid"
+            go_type: "github.com/google/uuid.UUID"

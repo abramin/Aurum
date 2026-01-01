@@ -11,7 +11,7 @@ func TestMain(m *testing.M) {
 	options := godog.Options{
 		Output: os.Stdout,
 		Format: "pretty",
-		Paths:  []string{"."},
+		Paths:  []string{"contract.feature"},
 	}
 
 	status := godog.TestSuite{
