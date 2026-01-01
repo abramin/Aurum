@@ -21,7 +21,8 @@ type CardAccount struct {
 }
 
 // NewCardAccount creates a new card account with the given spending limit.
-// The now parameter makes the function pure and testable.
+// It validates the tenant ID, initializes rolling spend to zero in the same currency,
+// and sets version/timestamps using the provided clock.
 // Returns error if tenant ID is empty.
 func NewCardAccount(tenantID types.TenantID, spendingLimit types.Money, now time.Time) (*CardAccount, error) {
 	if tenantID.IsEmpty() {
@@ -39,7 +40,8 @@ func NewCardAccount(tenantID types.TenantID, spendingLimit types.Money, now time
 }
 
 // ReconstructCardAccount reconstructs a CardAccount from persistence.
-// This bypasses validation - only use for loading from database.
+// This bypasses validation and should only be used for trusted storage reads,
+// preserving the stored version and timestamps as-is.
 func ReconstructCardAccount(
 	id CardAccountID,
 	tenantID types.TenantID,
@@ -61,7 +63,8 @@ func ReconstructCardAccount(
 }
 
 // AuthorizeAmount validates and records an authorization amount.
-// The now parameter makes the function pure and testable.
+// It checks currency compatibility, computes the new rolling spend, enforces the limit,
+// and updates the version/timestamp on success.
 // Returns error if the authorization would exceed the spending limit.
 func (c *CardAccount) AuthorizeAmount(amount types.Money, now time.Time) error {
 	if amount.Currency != c.spendingLimit.Currency {
@@ -84,7 +87,7 @@ func (c *CardAccount) AuthorizeAmount(amount types.Money, now time.Time) error {
 }
 
 // ReleaseAmount releases a previously authorized amount (e.g., on reversal).
-// The now parameter makes the function pure and testable.
+// It checks currency compatibility, subtracts from rolling spend, and updates version/timestamp.
 func (c *CardAccount) ReleaseAmount(amount types.Money, now time.Time) error {
 	if amount.Currency != c.rollingSpend.Currency {
 		return ErrCurrencyMismatch

@@ -47,7 +47,8 @@ type Authorization struct {
 }
 
 // NewAuthorization creates a new authorization in the Authorized state.
-// The now parameter makes the function pure and testable.
+// It validates the tenant ID, initializes the captured amount to zero,
+// and sets version/timestamps using the provided clock.
 // Returns error if tenant ID is empty.
 func NewAuthorization(
 	tenantID types.TenantID,
@@ -76,7 +77,8 @@ func NewAuthorization(
 }
 
 // ReconstructAuthorization reconstructs an Authorization from persistence.
-// Returns error if data violates domain invariants (indicates corrupt data).
+// It validates state and amount invariants to detect corrupt data,
+// and preserves the stored version/timestamps as-is.
 func ReconstructAuthorization(
 	id AuthorizationID,
 	tenantID types.TenantID,
@@ -112,7 +114,8 @@ func ReconstructAuthorization(
 }
 
 // Capture captures the authorization with the given amount.
-// The now parameter makes the function pure and testable.
+// It validates state, currency, and amount, then updates captured amount,
+// state, version, and timestamp.
 // Returns error if:
 //   - Already captured
 //   - Not in Authorized state
@@ -139,7 +142,7 @@ func (a *Authorization) Capture(amount types.Money, now time.Time) error {
 }
 
 // Reverse reverses the authorization.
-// The now parameter makes the function pure and testable.
+// It validates the current state and updates state, version, and timestamp.
 func (a *Authorization) Reverse(now time.Time) error {
 	if a.state != AuthorizationStateAuthorized {
 		return ErrInvalidStateTransition
@@ -152,7 +155,7 @@ func (a *Authorization) Reverse(now time.Time) error {
 }
 
 // Expire expires the authorization.
-// The now parameter makes the function pure and testable.
+// It validates the current state and updates state, version, and timestamp.
 func (a *Authorization) Expire(now time.Time) error {
 	if a.state != AuthorizationStateAuthorized {
 		return ErrInvalidStateTransition

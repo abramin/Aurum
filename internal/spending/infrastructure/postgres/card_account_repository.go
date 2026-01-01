@@ -24,8 +24,10 @@ func NewCardAccountRepository(db Executor) *CardAccountRepository {
 }
 
 // Save persists a card account to the database.
-// Uses UPSERT with optimistic locking to prevent concurrent modification conflicts.
-// Single round-trip: INSERT on new, UPDATE on existing (with version check).
+// It uses an UPSERT with optimistic locking:
+//   - Inserts when version == 1
+//   - Updates only if the stored version matches (version - 1)
+// Returns ErrOptimisticLock when a concurrent update wins the version check.
 func (r *CardAccountRepository) Save(ctx context.Context, account *domain.CardAccount) error {
 	// Use UPSERT pattern: INSERT ... ON CONFLICT DO UPDATE with version check
 	// For new records (version=1): inserts successfully
@@ -67,6 +69,8 @@ func (r *CardAccountRepository) Save(ctx context.Context, account *domain.CardAc
 }
 
 // FindByID retrieves a card account by ID.
+// It queries by tenant and ID, maps missing rows to ErrCardAccountNotFound,
+// and reconstructs the aggregate from stored values.
 func (r *CardAccountRepository) FindByID(ctx context.Context, tenantID types.TenantID, id domain.CardAccountID) (*domain.CardAccount, error) {
 	return r.findOne(ctx, `
 		SELECT id, tenant_id,
@@ -80,6 +84,7 @@ func (r *CardAccountRepository) FindByID(ctx context.Context, tenantID types.Ten
 }
 
 // FindByTenantID retrieves the card account for a tenant.
+// It loads the first matching row for the tenant and reconstructs the aggregate.
 func (r *CardAccountRepository) FindByTenantID(ctx context.Context, tenantID types.TenantID) (*domain.CardAccount, error) {
 	return r.findOne(ctx, `
 		SELECT id, tenant_id,

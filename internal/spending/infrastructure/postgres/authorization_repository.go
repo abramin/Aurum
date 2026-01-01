@@ -24,8 +24,10 @@ func NewAuthorizationRepository(db Executor) *AuthorizationRepository {
 }
 
 // Save persists an authorization to the database.
-// Uses UPSERT with optimistic locking to prevent concurrent modification conflicts.
-// Single round-trip: INSERT on new, UPDATE on existing (with version check).
+// It uses an UPSERT with optimistic locking:
+//   - Inserts when version == 1
+//   - Updates only if the stored version matches (version - 1)
+// Returns ErrOptimisticLock when a concurrent update wins the version check.
 func (r *AuthorizationRepository) Save(ctx context.Context, auth *domain.Authorization) error {
 	// Use UPSERT pattern: INSERT ... ON CONFLICT DO UPDATE with version check
 	// For new records (version=1): inserts successfully
@@ -73,6 +75,8 @@ func (r *AuthorizationRepository) Save(ctx context.Context, auth *domain.Authori
 }
 
 // FindByID retrieves an authorization by ID.
+// It queries by tenant and ID, maps missing rows to ErrAuthorizationNotFound,
+// validates stored IDs/state, and reconstructs the aggregate from stored values.
 func (r *AuthorizationRepository) FindByID(ctx context.Context, tenantID types.TenantID, id domain.AuthorizationID) (*domain.Authorization, error) {
 	var (
 		authID           string

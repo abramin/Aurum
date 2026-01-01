@@ -22,6 +22,7 @@ func NewHandler(service *application.SpendingService) *Handler {
 }
 
 // RegisterRoutes registers the Spending API routes on the given mux.
+// It wires each HTTP method/path to its corresponding handler.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /authorizations", h.CreateAuthorization)
 	mux.HandleFunc("GET /authorizations/{id}", h.GetAuthorization)
@@ -39,6 +40,8 @@ type CreateAuthorizationRequest struct {
 }
 
 // CreateAuthorization handles POST /authorizations.
+// It decodes and validates the request body, ensures a correlation ID,
+// delegates to the service, and writes the JSON response.
 func (h *Handler) CreateAuthorization(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -83,6 +86,7 @@ func (h *Handler) CreateAuthorization(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetAuthorization handles GET /authorizations/{id}.
+// It validates inputs, loads the authorization via the service, and responds with JSON.
 func (h *Handler) GetAuthorization(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -118,6 +122,8 @@ type CaptureAuthorizationRequest struct {
 }
 
 // CaptureAuthorization handles POST /authorizations/{id}/capture.
+// It decodes and validates the request body, ensures a correlation ID,
+// delegates to the service, and writes the JSON response.
 func (h *Handler) CaptureAuthorization(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -169,6 +175,8 @@ type CreateCardAccountRequest struct {
 }
 
 // CreateCardAccount handles POST /card-accounts.
+// It decodes and validates the request body, delegates to the service,
+// and writes the JSON response.
 func (h *Handler) CreateCardAccount(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

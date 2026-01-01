@@ -23,6 +23,7 @@ func NewOutboxRepository(db Executor) *OutboxRepository {
 }
 
 // Append adds an event to the outbox.
+// It persists the event payload and metadata as part of the current transaction.
 func (r *OutboxRepository) Append(ctx context.Context, entry *domain.OutboxEntry) error {
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO spending.outbox (
@@ -42,7 +43,8 @@ func (r *OutboxRepository) Append(ctx context.Context, entry *domain.OutboxEntry
 }
 
 // FetchUnpublished retrieves unpublished events for publishing.
-// Orders by occurred_at to maintain event ordering.
+// It locks rows with FOR UPDATE SKIP LOCKED to support concurrent publishers,
+// ordering by occurred_at to maintain event ordering.
 func (r *OutboxRepository) FetchUnpublished(ctx context.Context, limit int) ([]*domain.OutboxEntry, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT event_id, event_type, tenant_id,
@@ -97,6 +99,7 @@ func (r *OutboxRepository) FetchUnpublished(ctx context.Context, limit int) ([]*
 }
 
 // MarkPublished marks events as published.
+// It is a no-op when the input list is empty.
 func (r *OutboxRepository) MarkPublished(ctx context.Context, ids []types.EventID) error {
 	if len(ids) == 0 {
 		return nil

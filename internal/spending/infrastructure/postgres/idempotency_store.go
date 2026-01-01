@@ -22,6 +22,7 @@ func NewIdempotencyStore(db Executor) *IdempotencyStore {
 }
 
 // Get retrieves an idempotency entry by key.
+// Returns (nil, nil) when no entry exists; absence is not treated as an error.
 func (s *IdempotencyStore) Get(ctx context.Context, tenantID types.TenantID, key string) (*domain.IdempotencyEntry, error) {
 	var (
 		tenant       string
@@ -57,6 +58,7 @@ func (s *IdempotencyStore) Get(ctx context.Context, tenantID types.TenantID, key
 }
 
 // Set stores an idempotency entry.
+// It upserts on (tenant_id, idempotency_key) and overwrites the stored response payload.
 func (s *IdempotencyStore) Set(ctx context.Context, entry *domain.IdempotencyEntry) error {
 	_, err := s.db.Exec(ctx, `
 		INSERT INTO spending.idempotency_keys (
@@ -77,7 +79,8 @@ func (s *IdempotencyStore) Set(ctx context.Context, entry *domain.IdempotencyEnt
 }
 
 // SetIfAbsent atomically stores an entry if no entry exists.
-// Uses a CTE to attempt insert and return existing row in a single round-trip.
+// It uses a CTE to attempt insert and return the existing row in a single round-trip.
+// Returns (true, entry, nil) if inserted, or (false, existing, nil) if already present.
 func (s *IdempotencyStore) SetIfAbsent(ctx context.Context, entry *domain.IdempotencyEntry) (bool, *domain.IdempotencyEntry, error) {
 	// Single-query pattern: CTE attempts insert, then UNION ALL selects existing if insert was skipped.
 	// This avoids the double round-trip of INSERT then SELECT on conflict.

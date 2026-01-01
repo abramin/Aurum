@@ -62,7 +62,8 @@ func (ds *DataStore) Outbox() domain.OutboxRepository {
 }
 
 // Atomic executes the callback atomically.
-// In the memory implementation, we use a mutex to ensure atomicity.
+// It locks the store, runs the callback against a transactional snapshot,
+// and commits staged changes only if the callback succeeds.
 func (ds *DataStore) Atomic(ctx context.Context, fn domain.AtomicCallback) error {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
@@ -261,6 +262,7 @@ type AuthorizationRepository struct {
 	store *DataStore
 }
 
+// Save stores an authorization in memory, overwriting any existing entry.
 func (r *AuthorizationRepository) Save(ctx context.Context, auth *domain.Authorization) error {
 	r.store.mu.Lock()
 	defer r.store.mu.Unlock()
@@ -269,6 +271,8 @@ func (r *AuthorizationRepository) Save(ctx context.Context, auth *domain.Authori
 	return nil
 }
 
+// FindByID loads an authorization by tenant and ID from memory.
+// Returns ErrAuthorizationNotFound when missing.
 func (r *AuthorizationRepository) FindByID(ctx context.Context, tenantID types.TenantID, id domain.AuthorizationID) (*domain.Authorization, error) {
 	r.store.mu.RLock()
 	defer r.store.mu.RUnlock()
@@ -283,6 +287,7 @@ type CardAccountRepository struct {
 	store *DataStore
 }
 
+// Save stores a card account in memory, overwriting any existing entry.
 func (r *CardAccountRepository) Save(ctx context.Context, account *domain.CardAccount) error {
 	r.store.mu.Lock()
 	defer r.store.mu.Unlock()
@@ -291,6 +296,8 @@ func (r *CardAccountRepository) Save(ctx context.Context, account *domain.CardAc
 	return nil
 }
 
+// FindByID loads a card account by tenant and ID from memory.
+// Returns ErrCardAccountNotFound when missing.
 func (r *CardAccountRepository) FindByID(ctx context.Context, tenantID types.TenantID, id domain.CardAccountID) (*domain.CardAccount, error) {
 	r.store.mu.RLock()
 	defer r.store.mu.RUnlock()
@@ -301,6 +308,8 @@ func (r *CardAccountRepository) FindByID(ctx context.Context, tenantID types.Ten
 	return nil, domain.ErrCardAccountNotFound
 }
 
+// FindByTenantID scans in-memory accounts for a matching tenant.
+// Returns ErrCardAccountNotFound when missing.
 func (r *CardAccountRepository) FindByTenantID(ctx context.Context, tenantID types.TenantID) (*domain.CardAccount, error) {
 	r.store.mu.RLock()
 	defer r.store.mu.RUnlock()
@@ -316,6 +325,8 @@ type IdempotencyStore struct {
 	store *DataStore
 }
 
+// Get retrieves an idempotency entry by tenant and key.
+// Returns (nil, nil) when no entry exists.
 func (s *IdempotencyStore) Get(ctx context.Context, tenantID types.TenantID, key string) (*domain.IdempotencyEntry, error) {
 	s.store.mu.RLock()
 	defer s.store.mu.RUnlock()
@@ -326,6 +337,7 @@ func (s *IdempotencyStore) Get(ctx context.Context, tenantID types.TenantID, key
 	return nil, nil
 }
 
+// Set stores or updates an idempotency entry by tenant and key.
 func (s *IdempotencyStore) Set(ctx context.Context, entry *domain.IdempotencyEntry) error {
 	s.store.mu.Lock()
 	defer s.store.mu.Unlock()
@@ -334,6 +346,8 @@ func (s *IdempotencyStore) Set(ctx context.Context, entry *domain.IdempotencyEnt
 	return nil
 }
 
+// SetIfAbsent stores an entry only if the key is not already present.
+// Returns (true, entry, nil) when inserted, or (false, existing, nil) when present.
 func (s *IdempotencyStore) SetIfAbsent(ctx context.Context, entry *domain.IdempotencyEntry) (bool, *domain.IdempotencyEntry, error) {
 	s.store.mu.Lock()
 	defer s.store.mu.Unlock()
@@ -349,6 +363,7 @@ type OutboxRepository struct {
 	store *DataStore
 }
 
+// Append adds an event entry to the in-memory outbox.
 func (r *OutboxRepository) Append(ctx context.Context, entry *domain.OutboxEntry) error {
 	r.store.mu.Lock()
 	defer r.store.mu.Unlock()
@@ -356,6 +371,7 @@ func (r *OutboxRepository) Append(ctx context.Context, entry *domain.OutboxEntry
 	return nil
 }
 
+// FetchUnpublished returns unpublished events in insertion order, up to the limit.
 func (r *OutboxRepository) FetchUnpublished(ctx context.Context, limit int) ([]*domain.OutboxEntry, error) {
 	r.store.mu.RLock()
 	defer r.store.mu.RUnlock()
@@ -371,6 +387,7 @@ func (r *OutboxRepository) FetchUnpublished(ctx context.Context, limit int) ([]*
 	return entries, nil
 }
 
+// MarkPublished sets PublishedAt for the specified events.
 func (r *OutboxRepository) MarkPublished(ctx context.Context, ids []types.EventID) error {
 	r.store.mu.Lock()
 	defer r.store.mu.Unlock()

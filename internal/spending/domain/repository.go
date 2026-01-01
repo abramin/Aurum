@@ -9,14 +9,24 @@ import (
 
 // AuthorizationRepository defines the interface for authorization persistence.
 type AuthorizationRepository interface {
+	// Save persists an authorization aggregate.
+	// Implementations may return ErrOptimisticLock if a version conflict is detected.
 	Save(ctx context.Context, auth *Authorization) error
+	// FindByID retrieves an authorization by tenant and ID.
+	// Returns ErrAuthorizationNotFound when no record exists.
 	FindByID(ctx context.Context, tenantID types.TenantID, id AuthorizationID) (*Authorization, error)
 }
 
 // CardAccountRepository defines the interface for card account persistence.
 type CardAccountRepository interface {
+	// Save persists a card account aggregate.
+	// Implementations may return ErrOptimisticLock if a version conflict is detected.
 	Save(ctx context.Context, account *CardAccount) error
+	// FindByID retrieves a card account by tenant and ID.
+	// Returns ErrCardAccountNotFound when no record exists.
 	FindByID(ctx context.Context, tenantID types.TenantID, id CardAccountID) (*CardAccount, error)
+	// FindByTenantID retrieves the card account associated with a tenant.
+	// Returns ErrCardAccountNotFound when no record exists.
 	FindByTenantID(ctx context.Context, tenantID types.TenantID) (*CardAccount, error)
 }
 
@@ -32,7 +42,10 @@ type IdempotencyEntry struct {
 
 // IdempotencyStore defines the interface for idempotency key storage.
 type IdempotencyStore interface {
+	// Get retrieves an idempotency entry by tenant and key.
+	// Returns (nil, nil) when no entry exists.
 	Get(ctx context.Context, tenantID types.TenantID, key string) (*IdempotencyEntry, error)
+	// Set stores or updates an idempotency entry for the given key.
 	Set(ctx context.Context, entry *IdempotencyEntry) error
 	// SetIfAbsent atomically stores an entry if no entry exists.
 	// Returns (true, entry, nil) if created, (false, existing, nil) if already exists.

@@ -125,9 +125,10 @@ type CreateAuthorizationResponse struct {
 // CreateAuthorization creates a new spend authorization.
 // This operation:
 //   - Checks idempotency key and returns existing response if found
-//   - Validates spending limit on the card account
-//   - Creates the authorization in Authorized state
-//   - Writes SpendAuthorized event to outbox
+//   - Loads the tenant card account and enforces spending limits
+//   - Creates the authorization in Authorized state and writes an outbox event
+//   - Stores the idempotency entry atomically to avoid TOCTOU races
+//   - Returns the stored response if a concurrent request wins the idempotency race
 //   - All within a single atomic transaction
 func (s *SpendingService) CreateAuthorization(ctx context.Context, req CreateAuthorizationRequest) (*CreateAuthorizationResponse, error) {
 	// Check idempotency OUTSIDE transaction - fast path for replays
@@ -236,8 +237,9 @@ type CaptureAuthorizationResponse struct {
 // This operation:
 //   - Checks idempotency key and returns existing response if found
 //   - Validates authorization state and capture amount
-//   - Updates authorization to Captured state
-//   - Writes SpendCaptured event to outbox
+//   - Updates authorization to Captured state and writes an outbox event
+//   - Stores the idempotency entry atomically to avoid TOCTOU races
+//   - Returns the stored response if a concurrent request wins the idempotency race
 //   - All within a single atomic transaction
 func (s *SpendingService) CaptureAuthorization(ctx context.Context, req CaptureAuthorizationRequest) (*CaptureAuthorizationResponse, error) {
 	// Check idempotency OUTSIDE transaction - fast path for replays
@@ -329,6 +331,8 @@ type GetAuthorizationResponse struct {
 }
 
 // GetAuthorization retrieves an authorization by ID.
+// It loads the aggregate and maps domain fields into the response payload,
+// formatting timestamps in RFC3339 for the API response.
 // This is a read-only operation and doesn't use the Atomic pattern.
 func (s *SpendingService) GetAuthorization(ctx context.Context, req GetAuthorizationRequest) (*GetAuthorizationResponse, error) {
 	auth, err := s.repos.Authorizations().FindByID(ctx, req.TenantID, req.AuthorizationID)
@@ -361,6 +365,10 @@ type CreateCardAccountResponse struct {
 }
 
 // CreateCardAccount creates a new card account for a tenant.
+// This operation:
+//   - Creates a new account with the provided limit and current timestamp
+//   - Persists the account within a single transaction
+//   - Returns the generated account ID
 // This is typically done during onboarding.
 func (s *SpendingService) CreateCardAccount(ctx context.Context, req CreateCardAccountRequest) (*CreateCardAccountResponse, error) {
 	var result *CreateCardAccountResponse
@@ -410,10 +418,11 @@ type ReverseAuthorizationResponse struct {
 // ReverseAuthorization reverses an existing authorization, releasing the held amount.
 // This operation:
 //   - Checks idempotency key and returns existing response if found
-//   - Validates authorization can be reversed (not already captured)
-//   - Updates authorization to Reversed state
-//   - Releases the held amount from the card account
-//   - Writes SpendReversed event to outbox
+//   - Validates the authorization can be reversed (not already captured)
+//   - Updates authorization to Reversed state and releases the held amount
+//   - Writes a SpendReversed event to the outbox
+//   - Stores the idempotency entry atomically to avoid TOCTOU races
+//   - Returns the stored response if a concurrent request wins the idempotency race
 //   - All within a single atomic transaction
 func (s *SpendingService) ReverseAuthorization(ctx context.Context, req ReverseAuthorizationRequest) (*ReverseAuthorizationResponse, error) {
 	// Check idempotency OUTSIDE transaction - fast path for replays
@@ -509,6 +518,7 @@ type GetCardAccountResponse struct {
 }
 
 // GetCardAccount retrieves a card account by tenant ID.
+// It loads the account and returns its limits along with the calculated available amount.
 func (s *SpendingService) GetCardAccount(ctx context.Context, tenantID types.TenantID) (*GetCardAccountResponse, error) {
 	cardAccount, err := s.repos.CardAccounts().FindByTenantID(ctx, tenantID)
 	if err != nil {
