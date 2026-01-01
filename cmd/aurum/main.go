@@ -13,6 +13,9 @@ import (
 	"aurum/internal/common/config"
 	"aurum/internal/common/logging"
 	"aurum/internal/common/types"
+	spendingapi "aurum/internal/spending/api"
+	"aurum/internal/spending/application"
+	"aurum/internal/spending/infrastructure/memory"
 )
 
 func main() {
@@ -46,6 +49,15 @@ func main() {
 
 	// Ready check endpoint (checks dependencies)
 	mux.HandleFunc("GET /ready", readyHandler(cfg))
+
+	// Setup Spending context with in-memory datastore
+	// In production, this would use postgres.NewDataStore(pool) instead
+	spendingDataStore := memory.NewDataStore()
+	spendingService := application.NewSpendingService(spendingDataStore)
+	spendingHandler := spendingapi.NewHandler(spendingService)
+	spendingHandler.RegisterRoutes(mux)
+
+	logging.InfoContext(startupCtx, "Spending context initialized")
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
