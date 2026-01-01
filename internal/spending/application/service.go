@@ -22,6 +22,37 @@ func (e *idempotencyConflictError) Error() string {
 	return "idempotency conflict: concurrent request completed first"
 }
 
+// checkIdempotency checks if a response already exists for the given idempotency key.
+// Returns the cached response if found, nil if not found.
+func checkIdempotency[T any](ctx context.Context, store domain.IdempotencyStore, tenantID types.TenantID, key string) (*T, error) {
+	existing, err := store.Get(ctx, tenantID, key)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, nil
+	}
+	var resp T
+	if err := json.Unmarshal(existing.ResponseBody, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// handleIdempotencyConflict handles the case where a concurrent request won the race.
+// Returns (response, nil) if conflict was handled, (nil, original error) otherwise.
+func handleIdempotencyConflict[T any](err error) (*T, error) {
+	var conflictErr *idempotencyConflictError
+	if !errors.As(err, &conflictErr) {
+		return nil, err
+	}
+	var resp T
+	if unmarshalErr := json.Unmarshal(conflictErr.existingEntry.ResponseBody, &resp); unmarshalErr != nil {
+		return nil, unmarshalErr
+	}
+	return &resp, nil
+}
+
 // SpendingService implements the application layer for the Spending context.
 //
 // Key design decisions:
@@ -73,17 +104,10 @@ func (s *SpendingService) CreateAuthorization(ctx context.Context, req CreateAut
 
 	err := s.dataStore.Atomic(ctx, func(repos domain.Repositories) error {
 		// Check idempotency - fast path for replays
-		existing, err := repos.IdempotencyStore().Get(ctx, req.TenantID, req.IdempotencyKey)
-		if err != nil {
+		if cached, err := checkIdempotency[CreateAuthorizationResponse](ctx, repos.IdempotencyStore(), req.TenantID, req.IdempotencyKey); err != nil {
 			return err
-		}
-		if existing != nil {
-			// Replay existing response
-			var resp CreateAuthorizationResponse
-			if err := json.Unmarshal(existing.ResponseBody, &resp); err != nil {
-				return err
-			}
-			result = &resp
+		} else if cached != nil {
+			result = cached
 			return nil
 		}
 
@@ -149,7 +173,6 @@ func (s *SpendingService) CreateAuthorization(ctx context.Context, req CreateAut
 			return err
 		}
 		if !created {
-			// Concurrent request won the race - rollback and return their response
 			return &idempotencyConflictError{existingEntry: existingEntry}
 		}
 
@@ -162,14 +185,10 @@ func (s *SpendingService) CreateAuthorization(ctx context.Context, req CreateAut
 		return nil
 	})
 
-	// Handle idempotency conflict - return the existing response
-	var conflictErr *idempotencyConflictError
-	if errors.As(err, &conflictErr) {
-		var resp CreateAuthorizationResponse
-		if unmarshalErr := json.Unmarshal(conflictErr.existingEntry.ResponseBody, &resp); unmarshalErr != nil {
-			return nil, unmarshalErr
-		}
-		return &resp, nil
+	if conflict, conflictErr := handleIdempotencyConflict[CreateAuthorizationResponse](err); conflictErr != nil {
+		return nil, conflictErr
+	} else if conflict != nil {
+		return conflict, nil
 	}
 
 	return result, err
@@ -203,17 +222,10 @@ func (s *SpendingService) CaptureAuthorization(ctx context.Context, req CaptureA
 
 	err := s.dataStore.Atomic(ctx, func(repos domain.Repositories) error {
 		// Check idempotency - fast path for replays
-		existing, err := repos.IdempotencyStore().Get(ctx, req.TenantID, req.IdempotencyKey)
-		if err != nil {
+		if cached, err := checkIdempotency[CaptureAuthorizationResponse](ctx, repos.IdempotencyStore(), req.TenantID, req.IdempotencyKey); err != nil {
 			return err
-		}
-		if existing != nil {
-			// Replay existing response
-			var resp CaptureAuthorizationResponse
-			if err := json.Unmarshal(existing.ResponseBody, &resp); err != nil {
-				return err
-			}
-			result = &resp
+		} else if cached != nil {
+			result = cached
 			return nil
 		}
 
@@ -263,7 +275,6 @@ func (s *SpendingService) CaptureAuthorization(ctx context.Context, req CaptureA
 			return err
 		}
 		if !created {
-			// Concurrent request won the race - rollback and return their response
 			return &idempotencyConflictError{existingEntry: existingEntry}
 		}
 
@@ -276,14 +287,10 @@ func (s *SpendingService) CaptureAuthorization(ctx context.Context, req CaptureA
 		return nil
 	})
 
-	// Handle idempotency conflict - return the existing response
-	var conflictErr *idempotencyConflictError
-	if errors.As(err, &conflictErr) {
-		var resp CaptureAuthorizationResponse
-		if unmarshalErr := json.Unmarshal(conflictErr.existingEntry.ResponseBody, &resp); unmarshalErr != nil {
-			return nil, unmarshalErr
-		}
-		return &resp, nil
+	if conflict, conflictErr := handleIdempotencyConflict[CaptureAuthorizationResponse](err); conflictErr != nil {
+		return nil, conflictErr
+	} else if conflict != nil {
+		return conflict, nil
 	}
 
 	return result, err
@@ -398,17 +405,10 @@ func (s *SpendingService) ReverseAuthorization(ctx context.Context, req ReverseA
 
 	err := s.dataStore.Atomic(ctx, func(repos domain.Repositories) error {
 		// Check idempotency - fast path for replays
-		existing, err := repos.IdempotencyStore().Get(ctx, req.TenantID, req.IdempotencyKey)
-		if err != nil {
+		if cached, err := checkIdempotency[ReverseAuthorizationResponse](ctx, repos.IdempotencyStore(), req.TenantID, req.IdempotencyKey); err != nil {
 			return err
-		}
-		if existing != nil {
-			// Replay existing response
-			var resp ReverseAuthorizationResponse
-			if err := json.Unmarshal(existing.ResponseBody, &resp); err != nil {
-				return err
-			}
-			result = &resp
+		} else if cached != nil {
+			result = cached
 			return nil
 		}
 
@@ -473,7 +473,6 @@ func (s *SpendingService) ReverseAuthorization(ctx context.Context, req ReverseA
 			return err
 		}
 		if !created {
-			// Concurrent request won the race - rollback and return their response
 			return &idempotencyConflictError{existingEntry: existingEntry}
 		}
 
@@ -486,14 +485,10 @@ func (s *SpendingService) ReverseAuthorization(ctx context.Context, req ReverseA
 		return nil
 	})
 
-	// Handle idempotency conflict - return the existing response
-	var conflictErr *idempotencyConflictError
-	if errors.As(err, &conflictErr) {
-		var resp ReverseAuthorizationResponse
-		if unmarshalErr := json.Unmarshal(conflictErr.existingEntry.ResponseBody, &resp); unmarshalErr != nil {
-			return nil, unmarshalErr
-		}
-		return &resp, nil
+	if conflict, conflictErr := handleIdempotencyConflict[ReverseAuthorizationResponse](err); conflictErr != nil {
+		return nil, conflictErr
+	} else if conflict != nil {
+		return conflict, nil
 	}
 
 	return result, err
