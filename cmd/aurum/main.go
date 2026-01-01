@@ -94,7 +94,10 @@ func main() {
 	logging.Info("Server stopped")
 }
 
-// correlationMiddleware adds correlation ID to each request.
+// requestTimeout is the maximum time allowed for processing a single request.
+const requestTimeout = 5 * time.Second
+
+// correlationMiddleware adds correlation ID and request timeout to each request.
 func correlationMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check for existing correlation ID in header
@@ -103,8 +106,12 @@ func correlationMiddleware(next http.Handler) http.Handler {
 			corrID = types.NewCorrelationID()
 		}
 
-		// Add to context
-		ctx := logging.WithCorrelationID(r.Context(), corrID)
+		// Add request timeout to prevent runaway requests
+		ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
+		defer cancel()
+
+		// Add correlation ID to context
+		ctx = logging.WithCorrelationID(ctx, corrID)
 
 		// Add tenant ID if present
 		if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" {

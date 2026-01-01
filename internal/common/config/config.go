@@ -11,6 +11,12 @@ type Config struct {
 	// Database
 	DatabaseURL string `env:"DATABASE_URL" envDefault:"postgres://aurum:aurum@localhost:5432/aurum?sslmode=disable"`
 
+	// Connection pool settings (tune for expected concurrency)
+	DBMaxConns        int `env:"DB_MAX_CONNS" envDefault:"25"`
+	DBMinConns        int `env:"DB_MIN_CONNS" envDefault:"5"`
+	DBMaxConnLifetime int `env:"DB_MAX_CONN_LIFETIME_MINS" envDefault:"30"` // minutes
+	DBMaxConnIdleTime int `env:"DB_MAX_CONN_IDLE_MINS" envDefault:"5"`      // minutes
+
 	// Kafka
 	KafkaBrokers string `env:"KAFKA_BROKERS" envDefault:"localhost:9092"`
 

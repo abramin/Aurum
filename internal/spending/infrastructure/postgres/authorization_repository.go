@@ -24,67 +24,49 @@ func NewAuthorizationRepository(db Executor) *AuthorizationRepository {
 }
 
 // Save persists an authorization to the database.
-// Uses optimistic locking via version column to prevent concurrent modification conflicts.
+// Uses UPSERT with optimistic locking to prevent concurrent modification conflicts.
+// Single round-trip: INSERT on new, UPDATE on existing (with version check).
 func (r *AuthorizationRepository) Save(ctx context.Context, auth *domain.Authorization) error {
-	// Check if authorization already exists
-	var existingVersion int
-	err := r.db.QueryRow(ctx,
-		`SELECT version FROM spending.authorizations WHERE id = $1 AND tenant_id = $2`,
-		auth.ID().String(), auth.TenantID().String(),
-	).Scan(&existingVersion)
-
-	if errors.Is(err, pgx.ErrNoRows) {
-		// Insert new authorization
-		_, err = r.db.Exec(ctx, `
-			INSERT INTO spending.authorizations (
-				id, tenant_id, card_account_id,
-				authorized_amount, authorized_currency,
-				captured_amount, captured_currency,
-				merchant_ref, reference, state, version,
-				created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-			auth.ID().String(),
-			auth.TenantID().String(),
-			auth.CardAccountID().String(),
-			auth.AuthorizedAmount().Amount,
-			auth.AuthorizedAmount().Currency,
-			auth.CapturedAmount().Amount,
-			auth.CapturedAmount().Currency,
-			auth.MerchantRef(),
-			auth.Reference(),
-			string(auth.State()),
-			auth.Version(),
-			auth.CreatedAt(),
-			auth.UpdatedAt(),
-		)
-		return err
-	}
-	if err != nil {
-		return err
-	}
-
-	// Update existing authorization with optimistic locking
+	// Use UPSERT pattern: INSERT ... ON CONFLICT DO UPDATE with version check
+	// For new records (version=1): inserts successfully
+	// For existing records: updates only if version matches (optimistic lock)
 	tag, err := r.db.Exec(ctx, `
-		UPDATE spending.authorizations
-		SET captured_amount = $1,
-			captured_currency = $2,
-			state = $3,
-			version = $4,
-			updated_at = $5
-		WHERE id = $6 AND tenant_id = $7 AND version = $8`,
-		auth.CapturedAmount().Amount,
-		auth.CapturedAmount().Currency,
-		string(auth.State()),
-		auth.Version(),
-		auth.UpdatedAt(),
+		INSERT INTO spending.authorizations (
+			id, tenant_id, card_account_id,
+			authorized_amount, authorized_currency,
+			captured_amount, captured_currency,
+			merchant_ref, reference, state, version,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		ON CONFLICT (id) DO UPDATE SET
+			captured_amount = EXCLUDED.captured_amount,
+			captured_currency = EXCLUDED.captured_currency,
+			state = EXCLUDED.state,
+			version = EXCLUDED.version,
+			updated_at = EXCLUDED.updated_at
+		WHERE spending.authorizations.version = EXCLUDED.version - 1`,
 		auth.ID().String(),
 		auth.TenantID().String(),
-		existingVersion,
+		auth.CardAccountID().String(),
+		auth.AuthorizedAmount().Amount,
+		auth.AuthorizedAmount().Currency,
+		auth.CapturedAmount().Amount,
+		auth.CapturedAmount().Currency,
+		auth.MerchantRef(),
+		auth.Reference(),
+		string(auth.State()),
+		auth.Version(),
+		auth.CreatedAt(),
+		auth.UpdatedAt(),
 	)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+
+	// For updates, if version didn't match, no rows affected
+	// For inserts, version=1 so we expect 1 row
+	// Check: version > 1 means update, and 0 rows = conflict
+	if auth.Version() > 1 && tag.RowsAffected() == 0 {
 		return domain.ErrOptimisticLock
 	}
 	return nil
