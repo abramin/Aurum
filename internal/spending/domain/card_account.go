@@ -21,7 +21,11 @@ type CardAccount struct {
 }
 
 // NewCardAccount creates a new card account with the given spending limit.
-func NewCardAccount(tenantID types.TenantID, spendingLimit types.Money) *CardAccount {
+// Returns error if tenant ID is empty.
+func NewCardAccount(tenantID types.TenantID, spendingLimit types.Money) (*CardAccount, error) {
+	if tenantID.IsEmpty() {
+		return nil, ErrEmptyTenantID
+	}
 	now := time.Now()
 	return &CardAccount{
 		id:            NewCardAccountID(),
@@ -31,7 +35,7 @@ func NewCardAccount(tenantID types.TenantID, spendingLimit types.Money) *CardAcc
 		version:       1,
 		createdAt:     now,
 		updatedAt:     now,
-	}
+	}, nil
 }
 
 // ReconstructCardAccount reconstructs a CardAccount from persistence.

@@ -33,7 +33,9 @@ func (s *AuthorizationSuite) SetupTest() {
 }
 
 func (s *AuthorizationSuite) newAuthorization() *domain.Authorization {
-	return domain.NewAuthorization(s.tenantID, s.cardAccountID, s.amount, "merchant-1", "ref-1")
+	auth, err := domain.NewAuthorization(s.tenantID, s.cardAccountID, s.amount, "merchant-1", "ref-1")
+	s.Require().NoError(err)
+	return auth
 }
 
 // TestSettlement validates the capture lifecycle - transitioning from authorized to captured state.

@@ -16,6 +16,17 @@ const (
 	AuthorizationStateExpired    AuthorizationState = "expired"
 )
 
+// IsValid returns true if the state is a known valid state.
+func (s AuthorizationState) IsValid() bool {
+	switch s {
+	case AuthorizationStateAuthorized, AuthorizationStateCaptured,
+		AuthorizationStateReversed, AuthorizationStateExpired:
+		return true
+	default:
+		return false
+	}
+}
+
 // Authorization represents a spend authorization (aggregate root).
 // Invariants:
 //   - Cannot capture more than authorized amount
@@ -36,13 +47,17 @@ type Authorization struct {
 }
 
 // NewAuthorization creates a new authorization in the Authorized state.
+// Returns error if tenant ID is empty.
 func NewAuthorization(
 	tenantID types.TenantID,
 	cardAccountID CardAccountID,
 	authorizedAmount types.Money,
 	merchantRef string,
 	reference string,
-) *Authorization {
+) (*Authorization, error) {
+	if tenantID.IsEmpty() {
+		return nil, ErrEmptyTenantID
+	}
 	now := time.Now()
 	return &Authorization{
 		id:               NewAuthorizationID(),
@@ -56,11 +71,11 @@ func NewAuthorization(
 		version:          1,
 		createdAt:        now,
 		updatedAt:        now,
-	}
+	}, nil
 }
 
 // ReconstructAuthorization reconstructs an Authorization from persistence.
-// This bypasses validation - only use for loading from database.
+// Returns error if data violates domain invariants (indicates corrupt data).
 func ReconstructAuthorization(
 	id AuthorizationID,
 	tenantID types.TenantID,
@@ -73,7 +88,13 @@ func ReconstructAuthorization(
 	version int,
 	createdAt time.Time,
 	updatedAt time.Time,
-) *Authorization {
+) (*Authorization, error) {
+	if !state.IsValid() {
+		return nil, ErrCorruptData
+	}
+	if capturedAmount.GreaterThan(authorizedAmount) {
+		return nil, ErrCorruptData
+	}
 	return &Authorization{
 		id:               id,
 		tenantID:         tenantID,
@@ -86,7 +107,7 @@ func ReconstructAuthorization(
 		version:          version,
 		createdAt:        createdAt,
 		updatedAt:        updatedAt,
-	}
+	}, nil
 }
 
 // Capture captures the authorization with the given amount.

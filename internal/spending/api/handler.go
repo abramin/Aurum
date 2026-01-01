@@ -44,20 +44,20 @@ func (h *Handler) CreateAuthorization(w http.ResponseWriter, r *http.Request) {
 
 	var req CreateAuthorizationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, "invalid request body", err)
+		h.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.TenantID == "" {
-		h.writeError(w, http.StatusBadRequest, "tenant_id is required", nil)
+		h.writeError(w, http.StatusBadRequest, "tenant_id is required")
 		return
 	}
 	if req.IdempotencyKey == "" {
-		h.writeError(w, http.StatusBadRequest, "idempotency_key is required", nil)
+		h.writeError(w, http.StatusBadRequest, "idempotency_key is required")
 		return
 	}
 	if req.Amount.IsZero() || !req.Amount.IsPositive() {
-		h.writeError(w, http.StatusBadRequest, "amount must be positive", nil)
+		h.writeError(w, http.StatusBadRequest, "amount must be positive")
 		return
 	}
 
@@ -88,13 +88,13 @@ func (h *Handler) GetAuthorization(w http.ResponseWriter, r *http.Request) {
 
 	tenantID := r.URL.Query().Get("tenant_id")
 	if tenantID == "" {
-		h.writeError(w, http.StatusBadRequest, "tenant_id query parameter is required", nil)
+		h.writeError(w, http.StatusBadRequest, "tenant_id query parameter is required")
 		return
 	}
 
 	authID, err := domain.ParseAuthorizationID(r.PathValue("id"))
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, "invalid authorization_id", err)
+		h.writeError(w, http.StatusBadRequest, "invalid authorization_id")
 		return
 	}
 
@@ -123,22 +123,22 @@ func (h *Handler) CaptureAuthorization(w http.ResponseWriter, r *http.Request) {
 
 	var req CaptureAuthorizationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, "invalid request body", err)
+		h.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.TenantID == "" {
-		h.writeError(w, http.StatusBadRequest, "tenant_id is required", nil)
+		h.writeError(w, http.StatusBadRequest, "tenant_id is required")
 		return
 	}
 	if req.IdempotencyKey == "" {
-		h.writeError(w, http.StatusBadRequest, "idempotency_key is required", nil)
+		h.writeError(w, http.StatusBadRequest, "idempotency_key is required")
 		return
 	}
 
 	authID, err := domain.ParseAuthorizationID(r.PathValue("id"))
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, "invalid authorization_id", err)
+		h.writeError(w, http.StatusBadRequest, "invalid authorization_id")
 		return
 	}
 
@@ -174,16 +174,16 @@ func (h *Handler) CreateCardAccount(w http.ResponseWriter, r *http.Request) {
 
 	var req CreateCardAccountRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, "invalid request body", err)
+		h.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.TenantID == "" {
-		h.writeError(w, http.StatusBadRequest, "tenant_id is required", nil)
+		h.writeError(w, http.StatusBadRequest, "tenant_id is required")
 		return
 	}
 	if req.SpendingLimit.IsZero() || !req.SpendingLimit.IsPositive() {
-		h.writeError(w, http.StatusBadRequest, "spending_limit must be positive", nil)
+		h.writeError(w, http.StatusBadRequest, "spending_limit must be positive")
 		return
 	}
 
@@ -200,27 +200,33 @@ func (h *Handler) CreateCardAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDomainError maps domain errors to HTTP responses.
+// Internal error details are logged but never exposed to clients.
 func (h *Handler) handleDomainError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, domain.ErrAuthorizationNotFound):
-		h.writeError(w, http.StatusNotFound, "authorization not found", nil)
+		h.writeError(w, http.StatusNotFound, "authorization not found")
 	case errors.Is(err, domain.ErrCardAccountNotFound):
-		h.writeError(w, http.StatusNotFound, "card account not found", nil)
+		h.writeError(w, http.StatusNotFound, "card account not found")
 	case errors.Is(err, domain.ErrAlreadyCaptured):
-		h.writeError(w, http.StatusConflict, "authorization already captured", nil)
+		h.writeError(w, http.StatusConflict, "authorization already captured")
 	case errors.Is(err, domain.ErrInvalidStateTransition):
-		h.writeError(w, http.StatusConflict, "invalid state transition", nil)
+		h.writeError(w, http.StatusConflict, "invalid state transition")
 	case errors.Is(err, domain.ErrExceedsAuthorizedAmount):
-		h.writeError(w, http.StatusBadRequest, "capture amount exceeds authorized amount", nil)
+		h.writeError(w, http.StatusBadRequest, "capture amount exceeds authorized amount")
 	case errors.Is(err, domain.ErrSpendingLimitExceeded):
-		h.writeError(w, http.StatusUnprocessableEntity, "spending limit exceeded", nil)
+		h.writeError(w, http.StatusUnprocessableEntity, "spending limit exceeded")
 	case errors.Is(err, domain.ErrCurrencyMismatch):
-		h.writeError(w, http.StatusBadRequest, "currency mismatch", nil)
+		h.writeError(w, http.StatusBadRequest, "currency mismatch")
 	case errors.Is(err, domain.ErrOptimisticLock):
-		h.writeError(w, http.StatusConflict, "concurrent modification detected, please retry", nil)
+		h.writeError(w, http.StatusConflict, "concurrent modification detected, please retry")
+	case errors.Is(err, domain.ErrEmptyTenantID):
+		h.writeError(w, http.StatusBadRequest, "tenant_id is required")
+	case errors.Is(err, domain.ErrCorruptData):
+		logging.Error("Corrupt data detected", "error", err)
+		h.writeError(w, http.StatusInternalServerError, "internal server error")
 	default:
 		logging.Error("Unhandled error", "error", err)
-		h.writeError(w, http.StatusInternalServerError, "internal server error", nil)
+		h.writeError(w, http.StatusInternalServerError, "internal server error")
 	}
 }
 
@@ -233,15 +239,11 @@ func (h *Handler) writeJSON(w http.ResponseWriter, status int, data any) {
 
 // ErrorResponse represents an error response.
 type ErrorResponse struct {
-	Error   string `json:"error"`
-	Message string `json:"message,omitempty"`
+	Error string `json:"error"`
 }
 
 // writeError writes an error response.
-func (h *Handler) writeError(w http.ResponseWriter, status int, message string, err error) {
-	resp := ErrorResponse{Error: message}
-	if err != nil {
-		resp.Message = err.Error()
-	}
-	h.writeJSON(w, status, resp)
+// Note: Internal error details are never exposed - they should be logged separately.
+func (h *Handler) writeError(w http.ResponseWriter, status int, message string) {
+	h.writeJSON(w, status, ErrorResponse{Error: message})
 }

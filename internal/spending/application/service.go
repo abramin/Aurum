@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -10,6 +11,16 @@ import (
 	"aurum/internal/common/types"
 	"aurum/internal/spending/domain"
 )
+
+// idempotencyConflictError is returned when a concurrent request won the race.
+// The transaction should be rolled back and the existing response returned.
+type idempotencyConflictError struct {
+	existingEntry *domain.IdempotencyEntry
+}
+
+func (e *idempotencyConflictError) Error() string {
+	return "idempotency conflict: concurrent request completed first"
+}
 
 // SpendingService implements the application layer for the Spending context.
 //
@@ -61,7 +72,7 @@ func (s *SpendingService) CreateAuthorization(ctx context.Context, req CreateAut
 	var result *CreateAuthorizationResponse
 
 	err := s.dataStore.Atomic(ctx, func(repos domain.Repositories) error {
-		// Check idempotency
+		// Check idempotency - fast path for replays
 		existing, err := repos.IdempotencyStore().Get(ctx, req.TenantID, req.IdempotencyKey)
 		if err != nil {
 			return err
@@ -88,13 +99,16 @@ func (s *SpendingService) CreateAuthorization(ctx context.Context, req CreateAut
 		}
 
 		// Create authorization
-		auth := domain.NewAuthorization(
+		auth, err := domain.NewAuthorization(
 			req.TenantID,
 			cardAccount.ID(),
 			req.Amount,
 			req.MerchantRef,
 			req.Reference,
 		)
+		if err != nil {
+			return err
+		}
 
 		// Save card account (with updated rolling spend)
 		if err := repos.CardAccounts().Save(ctx, cardAccount); err != nil {
@@ -121,17 +135,22 @@ func (s *SpendingService) CreateAuthorization(ctx context.Context, req CreateAut
 			Status:          string(auth.State()),
 		}
 
-		// Store idempotency entry
+		// Atomically store idempotency entry - prevents TOCTOU race
 		responseBody, _ := json.Marshal(result)
-		if err := repos.IdempotencyStore().Set(ctx, &domain.IdempotencyEntry{
+		created, existingEntry, err := repos.IdempotencyStore().SetIfAbsent(ctx, &domain.IdempotencyEntry{
 			TenantID:       req.TenantID,
 			IdempotencyKey: req.IdempotencyKey,
 			ResourceID:     auth.ID().String(),
 			StatusCode:     http.StatusCreated,
 			ResponseBody:   responseBody,
 			CreatedAt:      time.Now(),
-		}); err != nil {
+		})
+		if err != nil {
 			return err
+		}
+		if !created {
+			// Concurrent request won the race - rollback and return their response
+			return &idempotencyConflictError{existingEntry: existingEntry}
 		}
 
 		logging.InfoContext(ctx, "Authorization created",
@@ -142,6 +161,16 @@ func (s *SpendingService) CreateAuthorization(ctx context.Context, req CreateAut
 
 		return nil
 	})
+
+	// Handle idempotency conflict - return the existing response
+	var conflictErr *idempotencyConflictError
+	if errors.As(err, &conflictErr) {
+		var resp CreateAuthorizationResponse
+		if unmarshalErr := json.Unmarshal(conflictErr.existingEntry.ResponseBody, &resp); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return &resp, nil
+	}
 
 	return result, err
 }
@@ -173,7 +202,7 @@ func (s *SpendingService) CaptureAuthorization(ctx context.Context, req CaptureA
 	var result *CaptureAuthorizationResponse
 
 	err := s.dataStore.Atomic(ctx, func(repos domain.Repositories) error {
-		// Check idempotency
+		// Check idempotency - fast path for replays
 		existing, err := repos.IdempotencyStore().Get(ctx, req.TenantID, req.IdempotencyKey)
 		if err != nil {
 			return err
@@ -220,17 +249,22 @@ func (s *SpendingService) CaptureAuthorization(ctx context.Context, req CaptureA
 			CapturedAmount:  auth.CapturedAmount().String(),
 		}
 
-		// Store idempotency entry
+		// Atomically store idempotency entry - prevents TOCTOU race
 		responseBody, _ := json.Marshal(result)
-		if err := repos.IdempotencyStore().Set(ctx, &domain.IdempotencyEntry{
+		created, existingEntry, err := repos.IdempotencyStore().SetIfAbsent(ctx, &domain.IdempotencyEntry{
 			TenantID:       req.TenantID,
 			IdempotencyKey: req.IdempotencyKey,
 			ResourceID:     auth.ID().String(),
 			StatusCode:     http.StatusOK,
 			ResponseBody:   responseBody,
 			CreatedAt:      time.Now(),
-		}); err != nil {
+		})
+		if err != nil {
 			return err
+		}
+		if !created {
+			// Concurrent request won the race - rollback and return their response
+			return &idempotencyConflictError{existingEntry: existingEntry}
 		}
 
 		logging.InfoContext(ctx, "Authorization captured",
@@ -241,6 +275,16 @@ func (s *SpendingService) CaptureAuthorization(ctx context.Context, req CaptureA
 
 		return nil
 	})
+
+	// Handle idempotency conflict - return the existing response
+	var conflictErr *idempotencyConflictError
+	if errors.As(err, &conflictErr) {
+		var resp CaptureAuthorizationResponse
+		if unmarshalErr := json.Unmarshal(conflictErr.existingEntry.ResponseBody, &resp); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return &resp, nil
+	}
 
 	return result, err
 }
@@ -302,7 +346,10 @@ func (s *SpendingService) CreateCardAccount(ctx context.Context, req CreateCardA
 	var result *CreateCardAccountResponse
 
 	err := s.dataStore.Atomic(ctx, func(repos domain.Repositories) error {
-		account := domain.NewCardAccount(req.TenantID, req.SpendingLimit)
+		account, err := domain.NewCardAccount(req.TenantID, req.SpendingLimit)
+		if err != nil {
+			return err
+		}
 
 		if err := repos.CardAccounts().Save(ctx, account); err != nil {
 			return err
@@ -350,7 +397,7 @@ func (s *SpendingService) ReverseAuthorization(ctx context.Context, req ReverseA
 	var result *ReverseAuthorizationResponse
 
 	err := s.dataStore.Atomic(ctx, func(repos domain.Repositories) error {
-		// Check idempotency
+		// Check idempotency - fast path for replays
 		existing, err := repos.IdempotencyStore().Get(ctx, req.TenantID, req.IdempotencyKey)
 		if err != nil {
 			return err
@@ -412,17 +459,22 @@ func (s *SpendingService) ReverseAuthorization(ctx context.Context, req ReverseA
 			Status:          string(auth.State()),
 		}
 
-		// Store idempotency entry
+		// Atomically store idempotency entry - prevents TOCTOU race
 		responseBody, _ := json.Marshal(result)
-		if err := repos.IdempotencyStore().Set(ctx, &domain.IdempotencyEntry{
+		created, existingEntry, err := repos.IdempotencyStore().SetIfAbsent(ctx, &domain.IdempotencyEntry{
 			TenantID:       req.TenantID,
 			IdempotencyKey: req.IdempotencyKey,
 			ResourceID:     auth.ID().String(),
 			StatusCode:     http.StatusOK,
 			ResponseBody:   responseBody,
 			CreatedAt:      time.Now(),
-		}); err != nil {
+		})
+		if err != nil {
 			return err
+		}
+		if !created {
+			// Concurrent request won the race - rollback and return their response
+			return &idempotencyConflictError{existingEntry: existingEntry}
 		}
 
 		logging.InfoContext(ctx, "Authorization reversed",
@@ -433,6 +485,16 @@ func (s *SpendingService) ReverseAuthorization(ctx context.Context, req ReverseA
 
 		return nil
 	})
+
+	// Handle idempotency conflict - return the existing response
+	var conflictErr *idempotencyConflictError
+	if errors.As(err, &conflictErr) {
+		var resp ReverseAuthorizationResponse
+		if unmarshalErr := json.Unmarshal(conflictErr.existingEntry.ResponseBody, &resp); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		return &resp, nil
+	}
 
 	return result, err
 }

@@ -31,7 +31,9 @@ func (s *CardAccountSuite) SetupTest() {
 }
 
 func (s *CardAccountSuite) newCardAccount() *domain.CardAccount {
-	return domain.NewCardAccount(s.tenantID, s.limit)
+	account, err := domain.NewCardAccount(s.tenantID, s.limit)
+	s.Require().NoError(err)
+	return account
 }
 
 // TestSpendLimitEnforcement validates that authorizations respect the spending limit.

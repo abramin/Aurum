@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -136,7 +137,10 @@ func (r *CardAccountRepository) findOne(ctx context.Context, query string, args 
 		return nil, err
 	}
 
-	parsedID, _ := domain.ParseCardAccountID(accountID)
+	parsedID, err := domain.ParseCardAccountID(accountID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid card_account_id %q: %v", domain.ErrCorruptData, accountID, err)
+	}
 
 	return domain.ReconstructCardAccount(
 		parsedID,

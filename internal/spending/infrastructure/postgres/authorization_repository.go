@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -131,8 +132,14 @@ func (r *AuthorizationRepository) FindByID(ctx context.Context, tenantID types.T
 		return nil, err
 	}
 
-	parsedID, _ := domain.ParseAuthorizationID(authID)
-	parsedCardAccountID, _ := domain.ParseCardAccountID(cardAccountID)
+	parsedID, err := domain.ParseAuthorizationID(authID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid authorization_id %q: %v", domain.ErrCorruptData, authID, err)
+	}
+	parsedCardAccountID, err := domain.ParseCardAccountID(cardAccountID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid card_account_id %q: %v", domain.ErrCorruptData, cardAccountID, err)
+	}
 
 	return domain.ReconstructAuthorization(
 		parsedID,
@@ -146,7 +153,7 @@ func (r *AuthorizationRepository) FindByID(ctx context.Context, tenantID types.T
 		version,
 		createdAt,
 		updatedAt,
-	), nil
+	)
 }
 
 // Verify interface implementation.

@@ -30,4 +30,10 @@ var (
 
 	// ErrIdempotencyKeyExists is returned when an idempotency key already exists.
 	ErrIdempotencyKeyExists = errors.New("idempotency key already exists")
+
+	// ErrCorruptData is returned when data loaded from persistence is invalid.
+	ErrCorruptData = errors.New("corrupt data in database")
+
+	// ErrEmptyTenantID is returned when a required tenant ID is empty.
+	ErrEmptyTenantID = errors.New("tenant_id is required")
 )
