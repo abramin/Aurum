@@ -116,7 +116,3 @@ To achieve native Mac desktop feel with heavy interactive visualizations, we wil
 * **Phase 2 (Visualization):** Implement ECharts in React. Bind the chart to the Rust backend output. Add the interactive "What-If" sliders.
 * **Phase 3 (CRUD & UI):** Build the screens to add/edit/delete Accounts, Transactions, and Scheduled Items.
 * **Phase 4 (Polish):** CSV import logic for historical transactions, macOS app icon, release build optimizations.
-
----
-
-Would you like me to output the exact terminal commands to initialize this Tauri + React + TypeScript project on your Mac so we can start building?
