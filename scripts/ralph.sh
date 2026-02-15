@@ -16,10 +16,12 @@ Options:
   --base-branch BRANCH      Base branch to start each slice from (default: main)
   --start N                 First slice number to process (default: 0)
   --end N                   Last slice number to process (default: no upper bound)
-  --test-cmd CMD            Test command (default: "go test ./...")
+  --test-cmd CMD            Test command (default: auto-detect by project type)
   --max-fix-rounds N        Max review->fix loops per slice (default: 2)
   --model MODEL             Codex model (optional)
   --codex-cmd CMD_OR_PATH   Codex executable or absolute path (default: auto-detect)
+  --codex-sandbox MODE      Codex sandbox mode (default: workspace-write)
+  --codex-approval POLICY   Codex approval policy (default: never)
   --push                    Push slice branch to origin
   --create-pr               Create PR after successful slice (implies --push)
   --close-issue             Close issue after successful slice
@@ -35,6 +37,8 @@ Env overrides:
   RALPH_MAX_FIX_ROUNDS
   RALPH_MODEL
   RALPH_CODEX_CMD
+  RALPH_CODEX_SANDBOX
+  RALPH_CODEX_APPROVAL
 USAGE
 }
 
@@ -108,10 +112,16 @@ REPO="${RALPH_REPO:-}"
 BASE_BRANCH="${RALPH_BASE_BRANCH:-main}"
 START="${RALPH_START:-0}"
 END="${RALPH_END:-}"
-TEST_CMD="${RALPH_TEST_CMD:-go test ./...}"
+TEST_CMD="${RALPH_TEST_CMD:-}"
+TEST_CMD_SET_BY_USER=0
+if [[ -n "${RALPH_TEST_CMD:-}" ]]; then
+  TEST_CMD_SET_BY_USER=1
+fi
 MAX_FIX_ROUNDS="${RALPH_MAX_FIX_ROUNDS:-2}"
 MODEL="${RALPH_MODEL:-}"
 CODEX_CMD="${RALPH_CODEX_CMD:-}"
+CODEX_SANDBOX="${RALPH_CODEX_SANDBOX:-workspace-write}"
+CODEX_APPROVAL="${RALPH_CODEX_APPROVAL:-never}"
 PUSH=0
 CREATE_PR=0
 CLOSE_ISSUE=0
@@ -137,6 +147,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --test-cmd)
       TEST_CMD="$2"
+      TEST_CMD_SET_BY_USER=1
       shift 2
       ;;
     --max-fix-rounds)
@@ -149,6 +160,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --codex-cmd)
       CODEX_CMD="$2"
+      shift 2
+      ;;
+    --codex-sandbox)
+      CODEX_SANDBOX="$2"
+      shift 2
+      ;;
+    --codex-approval)
+      CODEX_APPROVAL="$2"
       shift 2
       ;;
     --push)
@@ -206,10 +225,55 @@ if ! [[ "$MAX_FIX_ROUNDS" =~ ^[0-9]+$ ]]; then
   echo "--max-fix-rounds must be a non-negative integer" >&2
   exit 1
 fi
+case "$CODEX_SANDBOX" in
+  read-only|workspace-write|danger-full-access)
+    ;;
+  *)
+    echo "--codex-sandbox must be one of: read-only, workspace-write, danger-full-access" >&2
+    exit 1
+    ;;
+esac
+case "$CODEX_APPROVAL" in
+  untrusted|on-failure|on-request|never)
+    ;;
+  *)
+    echo "--codex-approval must be one of: untrusted, on-failure, on-request, never" >&2
+    exit 1
+    ;;
+esac
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "Run this script inside a git repo." >&2
   exit 1
+fi
+
+git_root="$(git rev-parse --show-toplevel)"
+if (( TEST_CMD_SET_BY_USER == 0 )); then
+  if [[ -f "$git_root/src-tauri/Cargo.toml" ]]; then
+    TEST_CMD="cargo test --manifest-path src-tauri/Cargo.toml"
+    log "Auto-detected Tauri Rust tests at $git_root/src-tauri/Cargo.toml"
+  elif [[ -f "$git_root/Cargo.toml" ]]; then
+    TEST_CMD="cargo test"
+    log "Auto-detected Rust tests at $git_root/Cargo.toml"
+  else
+    cargo_manifests=()
+    while IFS= read -r manifest_path; do
+      cargo_manifests+=("$manifest_path")
+    done < <(find "$git_root" -name Cargo.toml -not -path '*/target/*')
+
+    if (( ${#cargo_manifests[@]} == 1 )); then
+      manifest_rel="${cargo_manifests[0]#$git_root/}"
+      printf -v TEST_CMD 'cargo test --manifest-path %q' "$manifest_rel"
+      log "Auto-detected Rust tests at ${cargo_manifests[0]}"
+    elif (( ${#cargo_manifests[@]} > 1 )); then
+      echo "Multiple Cargo.toml files found; pass --test-cmd explicitly (or set RALPH_TEST_CMD)." >&2
+      exit 1
+    else
+      echo "Could not auto-detect a Rust/Tauri test command; pass --test-cmd explicitly (or set RALPH_TEST_CMD)." >&2
+      echo "Example: --test-cmd \"cargo test --manifest-path src-tauri/Cargo.toml\"" >&2
+      exit 1
+    fi
+  fi
 fi
 
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -237,15 +301,15 @@ cat > "$review_schema" <<'JSON'
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["severity", "issue", "fix"],
+        "required": ["severity", "file", "line", "issue", "fix"],
         "additionalProperties": false,
         "properties": {
           "severity": {
             "type": "string",
             "enum": ["critical", "high", "medium", "low"]
           },
-          "file": {"type": "string"},
-          "line": {"type": "integer"},
+          "file": {"type": ["string", "null"]},
+          "line": {"type": ["integer", "null"]},
           "issue": {"type": "string"},
           "fix": {"type": "string"}
         }
@@ -255,7 +319,7 @@ cat > "$review_schema" <<'JSON'
 }
 JSON
 
-codex_exec_base=("$CODEX_BIN" -a never -s workspace-write exec)
+codex_exec_base=("$CODEX_BIN" --ask-for-approval "$CODEX_APPROVAL" --sandbox "$CODEX_SANDBOX" exec)
 if [[ -n "$MODEL" ]]; then
   codex_exec_base+=(--model "$MODEL")
 fi
@@ -265,6 +329,8 @@ log "Base branch: $BASE_BRANCH"
 log "Slice range: $START to ${END:-max}"
 log "Test command: $TEST_CMD"
 log "Codex command: $CODEX_BIN"
+log "Codex sandbox: $CODEX_SANDBOX"
+log "Codex approval: $CODEX_APPROVAL"
 
 run git switch "$BASE_BRANCH"
 run git pull --ff-only
